@@ -29,17 +29,32 @@ jobs:
       run: |
         python3 make.py esp32 submodules mpy_cross BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=xpt2046 --flash-size=4 --optimize-size
 
-    - name: Recopilar binarios independientes del ESP-IDF
+    - name: Unificar binarios en una sola imagen de 4MB con esptool
       run: |
+        pip install esptool
         mkdir -p final_firmware
-        find lib/micropython/ports/esp32 -name "bootloader.bin" -exec cp {} final_firmware/ \;
-        find lib/micropython/ports/esp32 -name "partition-table.bin" -exec cp {} final_firmware/ \;
-        find lib/micropython/ports/esp32 -name "micropython.bin" -exec cp {} final_firmware/ \;
-        find lib/micropython/ports/esp32 -name "firmware.bin" -exec cp {} final_firmware/ \;
+        
+        # Localizamos las rutas exactas generadas por ESP-IDF dentro del submódulo
+        BOOTLOADER=$(find . -name "bootloader.bin" | head -n 1)
+        PARTITIONS=$(find . -name "partition-table.bin" | head -n 1)
+        FIRMWARE=$(find . -name "micropython.bin" | head -n 1)
+        
+        echo "Bootloader encontrado: $BOOTLOADER"
+        echo "Particiones encontradas: $PARTITIONS"
+        echo "Firmware encontrado: $FIRMWARE"
+        
+        # Fusionamos todo en un único binario listo para flashear en 0x0
+        esptool.py --chip esp32 merge_bin \
+          -o final_firmware/firmware_unificado.bin \
+          --flash_mode dio --flash_size 4MB \
+          0x1000 "$BOOTLOADER" \
+          0x8000 "$PARTITIONS" \
+          0x10000 "$FIRMWARE"
+          
         ls -la final_firmware/
 
-    - name: Subir archivos como Artifact
+    - name: Subir binario unificado como Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-cyd-separado
+        name: firmware-cyd-unificado
         path: final_firmware/*.bin
