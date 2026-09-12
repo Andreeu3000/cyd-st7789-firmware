@@ -22,10 +22,10 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential cmake ninja-build python3-venv libusb-1.0-0-dev git wget curl
 
-    - name: Crear estructura requerida para evitar errores de CMake
+    - name: Crear estructura y configuración de módulos requerida por CMake
       run: |
         mkdir -p ext_mod
-        touch ext_mod/micropython.cmake
+        echo "set(USER_C_MODULES_DIR \${CMAKE_CURRENT_LIST_DIR})" > ext_mod/micropython.cmake
 
     - name: Compilar Firmware para ESP32 CYD
       run: |
@@ -46,4 +46,3 @@ jobs:
       with:
         name: firmware-cyd-st7789
         path: final_firmware/
-        
