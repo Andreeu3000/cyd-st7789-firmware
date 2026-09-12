@@ -25,15 +25,14 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y cmake ninja-build gperf libffi-dev libssl-dev dfu-util libusb-1.0-0 build-essential git wget curl
 
-    - name: Compilar Firmware con make.py
+    - name: Compilar Firmware para ESP32 CYD con make.py
       run: |
-        # El script make.py de kdschlosser descarga y configura el ESP-IDF automáticamente
-        python3 make.py esp32 submodules clean mpy_cross BOARD=GENERIC DISPLAY=st7789
+        python3 make.py esp32 submodules clean mpy_cross BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=xpt2046 --flash-size=4 --optimize-size
 
     - name: Subir el archivo .bin como Artifact
       uses: actions/upload-artifact@v4
       with:
         name: firmware-cyd-st7789
         path: |
-          lib/micropython/ports/esp32/build-GENERIC/*.bin
-          ports/esp32/build-GENERIC/*.bin
+          lib/micropython/ports/esp32/build-ESP32_GENERIC/*.bin
+          ports/esp32/build-ESP32_GENERIC/*.bin
