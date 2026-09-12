@@ -1,0 +1,57 @@
+name: Compilar Firmware CYD ST7789
+
+on:
+  workflow_dispatch: # Permite darle a un botón para que compile cuando quieras
+
+jobs:
+  build:
+  
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repositorio principal de LVGL Micropython
+      uses: actions/checkout@v4
+      with:
+        repository: kdschlosser/lvgl_micropython
+        submodules: recursive
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Configurar Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Instalar dependencias del sistema y ESP-IDF
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build gperf libffi-dev libssl-dev dfu-util libusb-1.0-0
+        
+    - name: Clonar e instalar ESP-IDF (v5.0.4)
+      run: |
+        git clone -b v5.0.4 --recursive https://github.com/espressif/esp-idf.git
+        cd esp-idf
+        ./install.sh
+
+    - name: Compilar mpy-cross y submódulos
+      run: |
+        cd lib/micropython
+        make -C mpy-cross
+        cd ports/esp32
+        make submodules
+
+    - name: Configurar variables de entorno y compilar el binario
+      run: |
+        source esp-idf/export.sh || true
+        # Aseguramos el export correcto de la ruta de esp-idf
+        export IDF_PATH=$PWD/esp-idf
+        cd lib/micropython/ports/esp32
+        # Forzamos la compilación para la placa GENERIC con LVGL
+        make BOARD=GENERIC USER_C_MODULES=../../../../micropython.cmake -j4
+
+    - name: Subir el archivo .bin como Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-cyd-st7789
+        path: |
+          lib/micropython/ports/esp32/build-GENERIC/*.bin
+          
