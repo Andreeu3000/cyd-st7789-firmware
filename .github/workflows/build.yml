@@ -42,15 +42,14 @@ jobs:
         cd lib/micropython
         make -C mpy-cross
         
-        # 3. Entramos al puerto esp32, cargamos submódulos y compilamos el firmware
+        # 3. Entramos al puerto esp32, cargamos submódulos y compilamos con BOARD=esp32
         cd ports/esp32
         make submodules
-        make BOARD=GENERIC USER_C_MODULES=../../../../micropython.cmake -j4
+        make BOARD=esp32 USER_C_MODULES=/home/runner/work/cyd-st7789-firmware/cyd-st7789-firmware/micropython.cmake -j4
 
     - name: Subir el archivo .bin como Artifact
       uses: actions/upload-artifact@v4
       with:
         name: firmware-cyd-st7789
         path: |
-          lib/micropython/ports/esp32/build-GENERIC/*.bin
-          
+          lib/micropython/ports/esp32/build-esp32/*.bin
