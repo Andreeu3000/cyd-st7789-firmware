@@ -22,14 +22,9 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential cmake ninja-build python3-venv libusb-1.0-0-dev git wget curl
 
-    - name: Crear estructura y configuración de módulos requerida por CMake
+    - name: Compilar Firmware para ESP32 CYD con drivers nativos
       run: |
-        mkdir -p ext_mod
-        echo "set(USER_C_MODULES_DIR \${CMAKE_CURRENT_LIST_DIR})" > ext_mod/micropython.cmake
-
-    - name: Compilar Firmware para ESP32 CYD
-      run: |
-        python3 make.py esp32 submodules mpy_cross BOARD=ESP32_GENERIC --flash-size=4 --optimize-size
+        python3 make.py esp32 submodules mpy_cross BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=xpt2046 --flash-size=4 --optimize-size
 
     - name: Preparar binarios para el Artifact
       run: |
