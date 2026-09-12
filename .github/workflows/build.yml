@@ -1,4 +1,4 @@
-name: Compilar Firmware CYD ST7789
+name: Compilar LVGL MicroPython - CYD ST7789
 
 on:
   workflow_dispatch:
@@ -6,38 +6,66 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Clonar repositorio oficial de LVGL Micropython
-      run: |
-        git clone https://github.com/kdschlosser/lvgl_micropython .
+      - name: Clonar LVGL MicroPython
+        run: |
+          git clone https://github.com/lvgl-micropython/lvgl_micropython.git .
 
-    - name: Configurar Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Instalar dependencias del sistema
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake ninja-build python3-venv libusb-1.0-0-dev git wget curl
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            python3 \
+            python3-venv \
+            libusb-1.0-0-dev
 
-    - name: Compilar Firmware para ESP32 CYD con drivers nativos
-      run: |
-        python3 make.py esp32 submodules mpy_cross BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=xpt2046 --flash-size=4 --optimize-size
+      - name: Compilar firmware
+        run: |
+          python3 make.py esp32 \
+            BOARD=ESP32_GENERIC \
+            DISPLAY=st7789 \
+            INDEV=xpt2046 \
+            --flash-size=4 \
+            --optimize-size
 
-    - name: Preparar binarios para el Artifact
-      run: |
-        mkdir -p final_firmware
-        
-        # Búsqueda robusta de los binarios generados por el motor CMake de ESP-IDF
-        find lib/micropython/ports/esp32/ -type f \( -name "firmware.bin" -o -name "micropython.bin" -o -name "bootloader.bin" -o -name "partition-table.bin" \) -exec cp {} final_firmware/ \;
-        
-        # Listar contenido para validar que se encontraron
-        ls -la final_firmware/
+      - name: Buscar firmware generado
+        run: |
+          echo "=== BINARIOS ==="
+          find . -type f -name "*.bin" -print
 
-    - name: Subir binarios como Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: firmware-cyd-st7789
-        path: final_firmware/
+      - name: Preparar firmware
+        run: |
+          mkdir -p final_firmware
+
+          find . -type f -name "bootloader.bin" \
+            -exec cp {} final_firmware/ \;
+
+          find . -type f -name "partition-table.bin" \
+            -exec cp {} final_firmware/ \;
+
+          find . -type f -name "micropython.bin" \
+            -exec cp {} final_firmware/ \;
+
+          echo "=== FINAL ==="
+          ls -lh final_firmware
+
+      - name: Verificar firmware
+        run: |
+          test -f final_firmware/micropython.bin
+          test -f final_firmware/bootloader.bin
+          test -f final_firmware/partition-table.bin
+
+      - name: Subir firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: lvgl-micropython-cyd-st7789
+          path: final_firmware/
