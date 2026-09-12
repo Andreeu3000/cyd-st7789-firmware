@@ -21,7 +21,7 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Instalar dependencias del sistema y ESP-IDF
+    - name: Instalar dependencias del sistema
       run: |
         sudo apt-get update
         sudo apt-get install -y cmake ninja-build gperf libffi-dev libssl-dev dfu-util libusb-1.0-0
@@ -32,20 +32,19 @@ jobs:
         cd esp-idf
         ./install.sh
 
-    - name: Compilar mpy-cross y submódulos
+    - name: Activar entorno, submódulos y compilar el binario
       run: |
+        # 1. Activamos el ESP-IDF y fijamos su ruta
+        . esp-idf/export.sh
+        export IDF_PATH=$PWD/esp-idf
+        
+        # 2. Compilamos mpy-cross
         cd lib/micropython
         make -C mpy-cross
+        
+        # 3. Entramos al puerto esp32, cargamos submódulos y compilamos el firmware
         cd ports/esp32
         make submodules
-
-    - name: Configurar variables de entorno y compilar el binario
-      run: |
-        source esp-idf/export.sh || true
-        # Aseguramos el export correcto de la ruta de esp-idf
-        export IDF_PATH=$PWD/esp-idf
-        cd lib/micropython/ports/esp32
-        # Forzamos la compilación para la placa GENERIC con LVGL
         make BOARD=GENERIC USER_C_MODULES=../../../../micropython.cmake -j4
 
     - name: Subir el archivo .bin como Artifact
