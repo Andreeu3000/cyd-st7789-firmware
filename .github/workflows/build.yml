@@ -34,5 +34,4 @@ jobs:
       with:
         name: firmware-cyd-st7789
         path: |
-          lib/micropython/ports/esp32/build-ESP32_GENERIC/*.bin
-          ports/esp32/build-ESP32_GENERIC/*.bin
+          **/*.bin
