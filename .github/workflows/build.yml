@@ -1,11 +1,10 @@
 name: Compilar Firmware CYD ST7789
 
 on:
-  workflow_dispatch: # Permite darle a un botón para que compile cuando quieras
+  workflow_dispatch:
 
 jobs:
   build:
-  
     runs-on: ubuntu-latest
     
     steps:
@@ -24,32 +23,17 @@ jobs:
     - name: Instalar dependencias del sistema
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake ninja-build gperf libffi-dev libssl-dev dfu-util libusb-1.0-0
-        
-    - name: Clonar e instalar ESP-IDF (v5.0.4)
-      run: |
-        git clone -b v5.0.4 --recursive https://github.com/espressif/esp-idf.git
-        cd esp-idf
-        ./install.sh
+        sudo apt-get install -y cmake ninja-build gperf libffi-dev libssl-dev dfu-util libusb-1.0-0 build-essential git wget curl
 
-    - name: Activar entorno, submódulos y compilar el binario
+    - name: Compilar Firmware con make.py
       run: |
-        # 1. Activamos el ESP-IDF y fijamos su ruta
-        . esp-idf/export.sh
-        export IDF_PATH=$PWD/esp-idf
-        
-        # 2. Compilamos mpy-cross
-        cd lib/micropython
-        make -C mpy-cross
-        
-        # 3. Entramos al puerto esp32, cargamos submódulos y compilamos con BOARD=esp32
-        cd ports/esp32
-        make submodules
-        make BOARD=esp32 USER_C_MODULES=/home/runner/work/cyd-st7789-firmware/cyd-st7789-firmware/micropython.cmake -j4
+        # El script make.py de kdschlosser descarga y configura el ESP-IDF automáticamente
+        python3 make.py esp32 submodules clean mpy_cross BOARD=GENERIC DISPLAY=st7789
 
     - name: Subir el archivo .bin como Artifact
       uses: actions/upload-artifact@v4
       with:
         name: firmware-cyd-st7789
         path: |
-          lib/micropython/ports/esp32/build-esp32/*.bin
+          lib/micropython/ports/esp32/build-GENERIC/*.bin
+          ports/esp32/build-GENERIC/*.bin
