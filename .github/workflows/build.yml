@@ -29,9 +29,13 @@ jobs:
       run: |
         python3 make.py esp32 submodules clean mpy_cross BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=xpt2046 --flash-size=4 --optimize-size
 
+    - name: Aislar el firmware.bin limpio
+      run: |
+        mkdir -p final_firmware
+        find . -name "firmware.bin" -exec cp {} final_firmware/ \;
+
     - name: Subir el archivo .bin como Artifact
       uses: actions/upload-artifact@v4
       with:
         name: firmware-cyd-st7789
-        path: |
-          **/*.bin
+        path: final_firmware/*.bin
