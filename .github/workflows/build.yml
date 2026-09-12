@@ -8,12 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repositorio principal de LVGL Micropython
-      uses: actions/checkout@v4
-      with:
-        repository: kdschlosser/lvgl_micropython
-        submodules: recursive
-        token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Clonar repositorio oficial de LVGL Micropython
+      run: |
+        git clone https://github.com/kdschlosser/lvgl_micropython .
 
     - name: Configurar Python
       uses: actions/setup-python@v5
@@ -23,19 +20,20 @@ jobs:
     - name: Instalar dependencias del sistema
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake ninja-build gperf libffi-dev libssl-dev dfu-util libusb-1.0-0 build-essential git wget curl
+        sudo apt-get install -y build-essential cmake ninja-build python3-venv libusb-1.0-0-dev git wget curl
 
-    - name: Compilar Firmware para ESP32 CYD con make.py
+    - name: Compilar Firmware para ESP32 CYD
       run: |
         python3 make.py esp32 submodules mpy_cross BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=xpt2046 --flash-size=4 --optimize-size
 
-    - name: Recopilar binarios generados para el Artifact
+    - name: Preparar binarios para el Artifact
       run: |
         mkdir -p final_firmware
         
-        # Buscamos y copiamos todos los binarios clave que genera ESP-IDF / MicroPython
-        find . -type f \( -name "bootloader.bin" -o -name "partition-table.bin" -o -name "micropython.bin" -o -name "firmware.bin" \) -exec cp {} final_firmware/ \;
+        # Búsqueda robusta de los binarios generados por el motor CMake de ESP-IDF
+        find lib/micropython/ports/esp32/ -type f \( -name "firmware.bin" -o -name "micropython.bin" -o -name "bootloader.bin" -o -name "partition-table.bin" \) -exec cp {} final_firmware/ \;
         
+        # Listar contenido para validar que se encontraron
         ls -la final_firmware/
 
     - name: Subir binarios como Artifact
