@@ -29,16 +29,17 @@ jobs:
       run: |
         python3 make.py esp32 submodules mpy_cross BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=xpt2046 --flash-size=4 --optimize-size
 
-    - name: Capturar y aislar el firmware real por tamaño
+    - name: Recopilar binarios independientes del ESP-IDF
       run: |
         mkdir -p final_firmware
-        # Busca recursivamente cualquier .bin en todo el workspace que pese más de 1 Megabyte
-        find . -type f -name "*.bin" -size +1M -exec cp {} final_firmware/ \;
-        # Muestra en los logs qué encontró para verificarlo
+        find lib/micropython/ports/esp32 -name "bootloader.bin" -exec cp {} final_firmware/ \;
+        find lib/micropython/ports/esp32 -name "partition-table.bin" -exec cp {} final_firmware/ \;
+        find lib/micropython/ports/esp32 -name "micropython.bin" -exec cp {} final_firmware/ \;
+        find lib/micropython/ports/esp32 -name "firmware.bin" -exec cp {} final_firmware/ \;
         ls -la final_firmware/
 
-    - name: Subir el archivo .bin como Artifact
+    - name: Subir archivos como Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-cyd-st7789
+        name: firmware-cyd-separado
         path: final_firmware/*.bin
