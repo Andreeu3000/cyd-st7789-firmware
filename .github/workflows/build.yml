@@ -29,11 +29,11 @@ jobs:
       run: |
         python3 make.py esp32 submodules clean mpy_cross BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=xpt2046 --flash-size=4 --optimize-size
 
-    - name: Aislar todos los binarios generados
+    - name: Aislar el firmware real de MicroPython
       run: |
         mkdir -p final_firmware
-        find lib/micropython/ports/esp32 -name "*.bin" -exec cp {} final_firmware/ \; || true
-        find ports/esp32 -name "*.bin" -exec cp {} final_firmware/ \; || true
+        # Copia únicamente el firmware.bin real ubicado en la ruta profunda de submodulos
+        find lib/micropython/ports/esp32 -name "firmware.bin" -size +500k -exec cp {} final_firmware/ \; || true
         ls -la final_firmware/
 
     - name: Subir el archivo .bin como Artifact
