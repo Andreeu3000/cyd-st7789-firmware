@@ -24,7 +24,7 @@ jobs:
 
     - name: Compilar Firmware para ESP32 CYD
       run: |
-        python3 make.py esp32 submodules mpy_cross BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=xpt2046 --flash-size=4 --optimize-size
+        python3 make.py esp32 submodules mpy_cross BOARD=ESP32_GENERIC --flash-size=4 --optimize-size
 
     - name: Preparar binarios para el Artifact
       run: |
