@@ -43,31 +43,146 @@ jobs:
             libusb-1.0-0-dev
 
       # =====================================================
-      # MOSTRAR CONFIGURACION
+      # CONFIGURAR LVGL
       # =====================================================
 
-      - name: Mostrar configuración LVGL
+      - name: Configurar funciones LVGL
         run: |
+
           echo "=========================================="
-          echo "CONFIGURACION LVGL"
+          echo "CONFIGURANDO LVGL"
           echo "=========================================="
 
-          echo "JPEG       = 1"
-          echo "PNG        = 1"
-          echo "BMP        = 1"
-          echo "GIF        = 1"
-          echo "QR         = 1"
-          echo "BARCODE    = 1"
-          echo "RLE        = 1"
-          echo "TINY TTF   = 1"
-          echo "TTF FILE   = 1"
+          # -------------------------------------------------
+          # Mostrar configuración original
+          # -------------------------------------------------
 
           echo ""
-          echo "Decodificadores pesados desactivados:"
-          echo "LIBJPEG_TURBO = 0"
-          echo "LIBPNG        = 0"
-          echo "LIBWEBP       = 0"
-          echo "FREETYPE      = 0"
+          echo "CONFIGURACION ORIGINAL:"
+          grep -E \
+            'LV_USE_TJPGD|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT' \
+            lib/lv_conf.h || true
+
+          # -------------------------------------------------
+          # Activar JPEG / TJPGD
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_TJPGD .*/#define LV_USE_TJPGD 1/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Activar PNG
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_LODEPNG .*/#define LV_USE_LODEPNG 1/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Activar BMP
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_BMP .*/#define LV_USE_BMP 1/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Activar GIF
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_GIF .*/#define LV_USE_GIF 1/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Activar QR
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_QRCODE .*/#define LV_USE_QRCODE 1/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Activar BARCODE
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_BARCODE .*/#define LV_USE_BARCODE 1/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Activar RLE
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_RLE .*/#define LV_USE_RLE 1/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Activar Tiny TTF
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_TINY_TTF .*/#define LV_USE_TINY_TTF 1/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Activar TTF desde archivo
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_TINY_TTF_FILE_SUPPORT .*/#define LV_TINY_TTF_FILE_SUPPORT 1/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Desactivar decodificadores pesados
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_LIBJPEG_TURBO .*/#define LV_USE_LIBJPEG_TURBO 0/' \
+            lib/lv_conf.h
+
+          sed -i \
+            's/^#define LV_USE_LIBPNG .*/#define LV_USE_LIBPNG 0/' \
+            lib/lv_conf.h
+
+          sed -i \
+            's/^#define LV_USE_LIBWEBP .*/#define LV_USE_LIBWEBP 0/' \
+            lib/lv_conf.h
+
+          sed -i \
+            's/^#define LV_USE_FREETYPE .*/#define LV_USE_FREETYPE 0/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Asegurar IMAGE
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_IMAGE .*/#define LV_USE_IMAGE 1/' \
+            lib/lv_conf.h
+
+          # =================================================
+          # MOSTRAR CONFIGURACION FINAL
+          # =================================================
+
+          echo ""
+          echo "=========================================="
+          echo "CONFIGURACION FINAL"
+          echo "=========================================="
+
+          grep -E \
+            'LV_USE_IMAGE|LV_USE_TJPGD|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT|LV_USE_LIBJPEG_TURBO|LV_USE_LIBPNG|LV_USE_LIBWEBP|LV_USE_FREETYPE' \
+            lib/lv_conf.h
+
+      # =====================================================
+      # LIMPIAR COMPILACIONES ANTERIORES
+      # =====================================================
+
+      - name: Limpiar compilación
+        run: |
+          python3 make.py esp32 clean
 
       # =====================================================
       # COMPILAR
@@ -79,7 +194,6 @@ jobs:
             BOARD=ESP32_GENERIC \
             DISPLAY=st7789 \
             INDEV=xpt2046 \
-            LV_CFLAGS="-DLV_USE_IMAGE=1 -DLV_USE_TJPGD=1 -DLV_USE_LODEPNG=1 -DLV_USE_BMP=1 -DLV_USE_GIF=1 -DLV_USE_QRCODE=1 -DLV_USE_BARCODE=1 -DLV_USE_RLE=1 -DLV_USE_TINY_TTF=1 -DLV_TINY_TTF_FILE_SUPPORT=1 -DLV_USE_LIBJPEG_TURBO=0 -DLV_USE_LIBPNG=0 -DLV_USE_LIBWEBP=0 -DLV_USE_FREETYPE=0" \
             --flash-size=4 \
             --optimize-size
 
@@ -89,7 +203,9 @@ jobs:
 
       - name: Buscar firmware generado
         run: |
-          echo "=== BINARIOS ==="
+          echo "=========================================="
+          echo "BINARIOS GENERADOS"
+          echo "=========================================="
 
           find . -type f -name "*.bin" -print
 
@@ -110,7 +226,10 @@ jobs:
           find . -type f -name "micropython.bin" \
             -exec cp {} final_firmware/ \;
 
-          echo "=== FINAL ==="
+          echo ""
+          echo "=========================================="
+          echo "FIRMWARE FINAL"
+          echo "=========================================="
 
           ls -lh final_firmware
 
@@ -120,14 +239,17 @@ jobs:
 
       - name: Verificar firmware
         run: |
+
+          echo "=========================================="
+          echo "VERIFICANDO"
+          echo "=========================================="
+
           test -f final_firmware/micropython.bin
           test -f final_firmware/bootloader.bin
           test -f final_firmware/partition-table.bin
 
           echo ""
-          echo "=========================================="
-          echo "FIRMWARE VALIDO"
-          echo "=========================================="
+          echo "TODOS LOS BINARIOS ESTAN PRESENTES"
 
       # =====================================================
       # SUBIR ARTIFACT
