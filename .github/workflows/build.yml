@@ -8,18 +8,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # =====================================================
+      # CLONAR LVGL MICROPYTHON
+      # =====================================================
+
       - name: Clonar LVGL MicroPython
         run: |
           git clone https://github.com/lvgl-micropython/lvgl_micropython.git .
+
+      # =====================================================
+      # PYTHON
+      # =====================================================
 
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # =====================================================
+      # DEPENDENCIAS
+      # =====================================================
+
       - name: Instalar dependencias
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             build-essential \
             cmake \
@@ -28,19 +42,60 @@ jobs:
             python3-venv \
             libusb-1.0-0-dev
 
+      # =====================================================
+      # MOSTRAR CONFIGURACION
+      # =====================================================
+
+      - name: Mostrar configuración LVGL
+        run: |
+          echo "=========================================="
+          echo "CONFIGURACION LVGL"
+          echo "=========================================="
+
+          echo "JPEG       = 1"
+          echo "PNG        = 1"
+          echo "BMP        = 1"
+          echo "GIF        = 1"
+          echo "QR         = 1"
+          echo "BARCODE    = 1"
+          echo "RLE        = 1"
+          echo "TINY TTF   = 1"
+          echo "TTF FILE   = 1"
+
+          echo ""
+          echo "Decodificadores pesados desactivados:"
+          echo "LIBJPEG_TURBO = 0"
+          echo "LIBPNG        = 0"
+          echo "LIBWEBP       = 0"
+          echo "FREETYPE      = 0"
+
+      # =====================================================
+      # COMPILAR
+      # =====================================================
+
       - name: Compilar firmware
         run: |
           python3 make.py esp32 \
             BOARD=ESP32_GENERIC \
             DISPLAY=st7789 \
             INDEV=xpt2046 \
+            LV_CFLAGS="-DLV_USE_IMAGE=1 -DLV_USE_TJPGD=1 -DLV_USE_LODEPNG=1 -DLV_USE_BMP=1 -DLV_USE_GIF=1 -DLV_USE_QRCODE=1 -DLV_USE_BARCODE=1 -DLV_USE_RLE=1 -DLV_USE_TINY_TTF=1 -DLV_TINY_TTF_FILE_SUPPORT=1 -DLV_USE_LIBJPEG_TURBO=0 -DLV_USE_LIBPNG=0 -DLV_USE_LIBWEBP=0 -DLV_USE_FREETYPE=0" \
             --flash-size=4 \
             --optimize-size
+
+      # =====================================================
+      # BUSCAR FIRMWARE
+      # =====================================================
 
       - name: Buscar firmware generado
         run: |
           echo "=== BINARIOS ==="
+
           find . -type f -name "*.bin" -print
+
+      # =====================================================
+      # PREPARAR FIRMWARE
+      # =====================================================
 
       - name: Preparar firmware
         run: |
@@ -56,13 +111,27 @@ jobs:
             -exec cp {} final_firmware/ \;
 
           echo "=== FINAL ==="
+
           ls -lh final_firmware
+
+      # =====================================================
+      # VERIFICAR FIRMWARE
+      # =====================================================
 
       - name: Verificar firmware
         run: |
           test -f final_firmware/micropython.bin
           test -f final_firmware/bootloader.bin
           test -f final_firmware/partition-table.bin
+
+          echo ""
+          echo "=========================================="
+          echo "FIRMWARE VALIDO"
+          echo "=========================================="
+
+      # =====================================================
+      # SUBIR ARTIFACT
+      # =====================================================
 
       - name: Subir firmware
         uses: actions/upload-artifact@v4
