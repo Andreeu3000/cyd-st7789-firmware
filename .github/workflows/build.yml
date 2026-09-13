@@ -59,9 +59,18 @@ jobs:
 
           echo ""
           echo "CONFIGURACION ORIGINAL:"
+
           grep -E \
-            'LV_USE_TJPGD|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT' \
+            'LV_USE_IMAGE|LV_USE_TJPGD|LV_USE_FS_MEMFS|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT|LV_USE_LIBJPEG_TURBO|LV_USE_LIBPNG|LV_USE_LIBWEBP|LV_USE_FREETYPE' \
             lib/lv_conf.h || true
+
+          # -------------------------------------------------
+          # Activar IMAGE
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_IMAGE .*/#define LV_USE_IMAGE 1/' \
+            lib/lv_conf.h
 
           # -------------------------------------------------
           # Activar JPEG / TJPGD
@@ -69,6 +78,17 @@ jobs:
 
           sed -i \
             's/^#define LV_USE_TJPGD .*/#define LV_USE_TJPGD 1/' \
+            lib/lv_conf.h
+
+          # -------------------------------------------------
+          # Activar MEMFS
+          #
+          # Necesario para la ruta de JPEG desde buffers
+          # cuando se utiliza TJPGD.
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_FS_MEMFS .*/#define LV_USE_FS_MEMFS 1/' \
             lib/lv_conf.h
 
           # -------------------------------------------------
@@ -155,14 +175,6 @@ jobs:
             's/^#define LV_USE_FREETYPE .*/#define LV_USE_FREETYPE 0/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Asegurar IMAGE
-          # -------------------------------------------------
-
-          sed -i \
-            's/^#define LV_USE_IMAGE .*/#define LV_USE_IMAGE 1/' \
-            lib/lv_conf.h
-
           # =================================================
           # MOSTRAR CONFIGURACION FINAL
           # =================================================
@@ -173,7 +185,7 @@ jobs:
           echo "=========================================="
 
           grep -E \
-            'LV_USE_IMAGE|LV_USE_TJPGD|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT|LV_USE_LIBJPEG_TURBO|LV_USE_LIBPNG|LV_USE_LIBWEBP|LV_USE_FREETYPE' \
+            'LV_USE_IMAGE|LV_USE_TJPGD|LV_USE_FS_MEMFS|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT|LV_USE_LIBJPEG_TURBO|LV_USE_LIBPNG|LV_USE_LIBWEBP|LV_USE_FREETYPE' \
             lib/lv_conf.h
 
       # =====================================================
