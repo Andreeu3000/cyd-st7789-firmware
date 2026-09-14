@@ -53,123 +53,132 @@ jobs:
           echo "CONFIGURANDO LVGL"
           echo "=========================================="
 
-          # -------------------------------------------------
-          # Mostrar configuración original
-          # -------------------------------------------------
-
           echo ""
-          echo "CONFIGURACION ORIGINAL:"
+          echo "VERSION / CONFIGURACION ORIGINAL"
+          echo "=========================================="
 
           grep -E \
             'LV_USE_IMAGE|LV_USE_TJPGD|LV_USE_FS_MEMFS|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT|LV_USE_LIBJPEG_TURBO|LV_USE_LIBPNG|LV_USE_LIBWEBP|LV_USE_FREETYPE' \
             lib/lv_conf.h || true
 
-          # -------------------------------------------------
-          # Activar IMAGE
-          # -------------------------------------------------
+          # =================================================
+          # IMAGE
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_IMAGE .*/#define LV_USE_IMAGE 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Activar JPEG / TJPGD
-          # -------------------------------------------------
+          # =================================================
+          # JPEG / TJPGD
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_TJPGD .*/#define LV_USE_TJPGD 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Activar MEMFS
+          # =================================================
+          # MEMFS
           #
           # Necesario para decodificar JPEG almacenado
-          # directamente en memoria.
-          # -------------------------------------------------
+          # como buffer en memoria.
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_FS_MEMFS .*/#define LV_USE_FS_MEMFS 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Activar PNG
-          # -------------------------------------------------
+          # =================================================
+          # PNG
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_LODEPNG .*/#define LV_USE_LODEPNG 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Activar BMP
-          # -------------------------------------------------
+          # =================================================
+          # BMP
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_BMP .*/#define LV_USE_BMP 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Activar GIF
-          # -------------------------------------------------
+          # =================================================
+          # GIF
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_GIF .*/#define LV_USE_GIF 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Activar QR
-          # -------------------------------------------------
+          # =================================================
+          # QR
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_QRCODE .*/#define LV_USE_QRCODE 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Activar BARCODE
-          # -------------------------------------------------
+          # =================================================
+          # BARCODE
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_BARCODE .*/#define LV_USE_BARCODE 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Activar RLE
-          # -------------------------------------------------
+          # =================================================
+          # RLE
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_RLE .*/#define LV_USE_RLE 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Activar Tiny TTF
-          # -------------------------------------------------
+          # =================================================
+          # TINY TTF
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_TINY_TTF .*/#define LV_USE_TINY_TTF 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Activar TTF desde archivo
-          # -------------------------------------------------
+          # =================================================
+          # TINY TTF DESDE ARCHIVO
+          # =================================================
 
           sed -i \
             's/^#define LV_TINY_TTF_FILE_SUPPORT .*/#define LV_TINY_TTF_FILE_SUPPORT 1/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Desactivar decodificadores pesados
-          # -------------------------------------------------
+          # =================================================
+          # DESACTIVAR JPEG TURBO
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_LIBJPEG_TURBO .*/#define LV_USE_LIBJPEG_TURBO 0/' \
             lib/lv_conf.h
 
+          # =================================================
+          # DESACTIVAR LIBPNG
+          # =================================================
+
           sed -i \
             's/^#define LV_USE_LIBPNG .*/#define LV_USE_LIBPNG 0/' \
             lib/lv_conf.h
 
+          # =================================================
+          # DESACTIVAR WEBP
+          # =================================================
+
           sed -i \
             's/^#define LV_USE_LIBWEBP .*/#define LV_USE_LIBWEBP 0/' \
             lib/lv_conf.h
+
+          # =================================================
+          # DESACTIVAR FREETYPE
+          # =================================================
 
           sed -i \
             's/^#define LV_USE_FREETYPE .*/#define LV_USE_FREETYPE 0/' \
@@ -189,7 +198,7 @@ jobs:
             lib/lv_conf.h
 
       # =====================================================
-      # LIMPIAR COMPILACIONES ANTERIORES
+      # LIMPIAR
       # =====================================================
 
       - name: Limpiar compilación
@@ -210,17 +219,43 @@ jobs:
             --optimize-size
 
       # =====================================================
-      # BUSCAR FIRMWARE
+      # BUSCAR MICROPYTHON.BIN
       # =====================================================
 
-      - name: Buscar firmware generado
+      - name: Buscar firmware real
         run: |
 
           echo "=========================================="
-          echo "BINARIOS GENERADOS"
+          echo "BUSCANDO MICROPYTHON.BIN"
           echo "=========================================="
 
-          find . -type f -name "*.bin" -print
+          find . \
+            -type f \
+            -path "*/build-ESP32_GENERIC/*" \
+            -name "micropython.bin" \
+            -print
+
+          echo ""
+          echo "=========================================="
+          echo "BUSCANDO BOOTLOADER"
+          echo "=========================================="
+
+          find . \
+            -type f \
+            -path "*/build-ESP32_GENERIC/*" \
+            -name "bootloader.bin" \
+            -print
+
+          echo ""
+          echo "=========================================="
+          echo "BUSCANDO PARTITION TABLE"
+          echo "=========================================="
+
+          find . \
+            -type f \
+            -path "*/build-ESP32_GENERIC/*" \
+            -name "partition-table.bin" \
+            -print
 
       # =====================================================
       # PREPARAR FIRMWARE
@@ -229,35 +264,100 @@ jobs:
       - name: Preparar firmware
         run: |
 
+          set -e
+
           mkdir -p final_firmware
 
+          # -------------------------------------------------
+          # Encontrar MICROPYTHON
+          # -------------------------------------------------
+
+          MICROPYTHON_BIN=$(find . \
+            -type f \
+            -path "*/build-ESP32_GENERIC/*" \
+            -name "micropython.bin" \
+            -print -quit)
+
+          # -------------------------------------------------
+          # Encontrar BOOTLOADER
+          # -------------------------------------------------
+
+          BOOTLOADER_BIN=$(find . \
+            -type f \
+            -path "*/build-ESP32_GENERIC/*" \
+            -name "bootloader.bin" \
+            -print -quit)
+
+          # -------------------------------------------------
+          # Encontrar PARTITION TABLE
+          # -------------------------------------------------
+
+          PARTITION_BIN=$(find . \
+            -type f \
+            -path "*/build-ESP32_GENERIC/*" \
+            -name "partition-table.bin" \
+            -print -quit)
+
           echo "=========================================="
-          echo "BUSCANDO BOOTLOADER"
+          echo "ARCHIVOS ENCONTRADOS"
           echo "=========================================="
 
-          find . -type f -name "bootloader.bin" \
-            -exec cp {} final_firmware/ \;
+          echo "MICROPYTHON:"
+          echo "$MICROPYTHON_BIN"
 
-          echo "=========================================="
-          echo "BUSCANDO PARTITION TABLE"
-          echo "=========================================="
+          echo ""
+          echo "BOOTLOADER:"
+          echo "$BOOTLOADER_BIN"
 
-          find . -type f -name "partition-table.bin" \
-            -exec cp {} final_firmware/ \;
+          echo ""
+          echo "PARTITION TABLE:"
+          echo "$PARTITION_BIN"
 
-          echo "=========================================="
-          echo "BUSCANDO MICROPYTHON"
-          echo "=========================================="
+          # -------------------------------------------------
+          # Verificar que existen
+          # -------------------------------------------------
 
-          find . -type f -name "micropython.bin" \
-            -exec cp {} final_firmware/ \;
+          if [ -z "$MICROPYTHON_BIN" ]; then
+            echo ""
+            echo "ERROR: NO SE ENCONTRO micropython.bin"
+            exit 1
+          fi
+
+          if [ -z "$BOOTLOADER_BIN" ]; then
+            echo ""
+            echo "ERROR: NO SE ENCONTRO bootloader.bin"
+            exit 1
+          fi
+
+          if [ -z "$PARTITION_BIN" ]; then
+            echo ""
+            echo "ERROR: NO SE ENCONTRO partition-table.bin"
+            exit 1
+          fi
+
+          # -------------------------------------------------
+          # Copiar
+          # -------------------------------------------------
+
+          cp "$MICROPYTHON_BIN" \
+            final_firmware/micropython.bin
+
+          cp "$BOOTLOADER_BIN" \
+            final_firmware/bootloader.bin
+
+          cp "$PARTITION_BIN" \
+            final_firmware/partition-table.bin
+
+          # =================================================
+          # MOSTRAR RESULTADO
+          # =================================================
 
           echo ""
           echo "=========================================="
           echo "FIRMWARE FINAL"
           echo "=========================================="
 
-          ls -lah final_firmware
+          ls -lh final_firmware
 
       # =====================================================
       # VERIFICAR FIRMWARE
@@ -266,60 +366,29 @@ jobs:
       - name: Verificar firmware
         run: |
 
+          set -e
+
           echo "=========================================="
-          echo "VERIFICANDO"
+          echo "VERIFICANDO FIRMWARE"
           echo "=========================================="
+
+          test -f final_firmware/micropython.bin
+          test -f final_firmware/bootloader.bin
+          test -f final_firmware/partition-table.bin
 
           echo ""
-          echo "ARCHIVOS EN final_firmware:"
-          echo ""
-
-          ls -lah final_firmware
+          echo "micropython.bin:"
+          ls -lh final_firmware/micropython.bin
 
           echo ""
-          echo "=========================================="
-          echo "COMPROBANDO ARCHIVOS"
-          echo "=========================================="
-
-          ERROR=0
-
-          if [ -f final_firmware/micropython.bin ]; then
-            echo "OK: micropython.bin"
-          else
-            echo "FALTA: micropython.bin"
-            ERROR=1
-          fi
-
-          if [ -f final_firmware/bootloader.bin ]; then
-            echo "OK: bootloader.bin"
-          else
-            echo "FALTA: bootloader.bin"
-            ERROR=1
-          fi
-
-          if [ -f final_firmware/partition-table.bin ]; then
-            echo "OK: partition-table.bin"
-          else
-            echo "FALTA: partition-table.bin"
-            ERROR=1
-          fi
+          echo "bootloader.bin:"
+          ls -lh final_firmware/bootloader.bin
 
           echo ""
-          echo "=========================================="
-          echo "TODOS LOS .BIN EN EL PROYECTO"
-          echo "=========================================="
-
-          find . -type f -name "*.bin" -print
+          echo "partition-table.bin:"
+          ls -lh final_firmware/partition-table.bin
 
           echo ""
-
-          if [ "$ERROR" -ne 0 ]; then
-            echo "=========================================="
-            echo "ERROR: FALTA UNO O MAS BINARIOS"
-            echo "=========================================="
-            exit 1
-          fi
-
           echo "=========================================="
           echo "TODOS LOS BINARIOS ESTAN PRESENTES"
           echo "=========================================="
