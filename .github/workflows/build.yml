@@ -9,367 +9,613 @@ jobs:
 
     steps:
 
-      # =====================================================
-      # CLONAR LVGL MICROPYTHON
-      # =====================================================
+      # ============================================================
+      # CLONAR
+      # ============================================================
 
       - name: Clonar LVGL MicroPython
         run: |
           git clone https://github.com/lvgl-micropython/lvgl_micropython.git .
 
-      # =====================================================
+          echo "=========================================="
+          echo "VERSION DEL REPOSITORIO"
+          echo "=========================================="
+
+          git rev-parse HEAD
+          git log -1 --oneline
+
+
+      # ============================================================
       # PYTHON
-      # =====================================================
+      # ============================================================
 
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # =====================================================
+
+      # ============================================================
       # DEPENDENCIAS
-      # =====================================================
+      # ============================================================
 
       - name: Instalar dependencias
         run: |
+          set -e
+
           sudo apt-get update
 
           sudo apt-get install -y \
             build-essential \
             cmake \
             ninja-build \
+            ccache \
             python3 \
             python3-venv \
             libusb-1.0-0-dev
 
-      # =====================================================
+
+      # ============================================================
       # CONFIGURAR LVGL
-      # =====================================================
+      # ============================================================
 
-      - name: Configurar funciones LVGL
+      - name: Configurar LVGL
         run: |
+          set -e
+
+          CONF="lib/lv_conf.h"
 
           echo "=========================================="
-          echo "CONFIGURANDO LVGL"
+          echo "BUSCANDO lv_conf.h"
           echo "=========================================="
 
-          echo ""
-          echo "CONFIGURACION ORIGINAL"
-          echo "=========================================="
+          if [ ! -f "$CONF" ]; then
+            echo "ERROR: no existe $CONF"
+            echo ""
+            echo "Archivos lv_conf.h encontrados:"
+            find . -name "lv_conf.h" -print
+            exit 1
+          fi
 
-          grep -E \
-            'LV_USE_IMAGE|LV_USE_TJPGD|LV_USE_FS_MEMFS|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT|LV_USE_LIBJPEG_TURBO|LV_USE_LIBPNG|LV_USE_LIBWEBP|LV_USE_FREETYPE' \
-            lib/lv_conf.h || true
-
-          # =================================================
-          # IMAGE
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_IMAGE .*/#define LV_USE_IMAGE 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # JPEG / TJPGD
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_TJPGD .*/#define LV_USE_TJPGD 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # MEMFS
-          #
-          # Necesario para JPEG desde memoria
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_FS_MEMFS .*/#define LV_USE_FS_MEMFS 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # PNG
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_LODEPNG .*/#define LV_USE_LODEPNG 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # BMP
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_BMP .*/#define LV_USE_BMP 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # GIF
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_GIF .*/#define LV_USE_GIF 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # QR
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_QRCODE .*/#define LV_USE_QRCODE 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # BARCODE
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_BARCODE .*/#define LV_USE_BARCODE 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # RLE
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_RLE .*/#define LV_USE_RLE 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # TINY TTF
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_TINY_TTF .*/#define LV_USE_TINY_TTF 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # TTF DESDE ARCHIVO
-          # =================================================
-
-          sed -i \
-            's/^#define LV_TINY_TTF_FILE_SUPPORT .*/#define LV_TINY_TTF_FILE_SUPPORT 1/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # DESACTIVAR LIBJPEG TURBO
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_LIBJPEG_TURBO .*/#define LV_USE_LIBJPEG_TURBO 0/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # DESACTIVAR LIBPNG
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_LIBPNG .*/#define LV_USE_LIBPNG 0/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # DESACTIVAR WEBP
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_LIBWEBP .*/#define LV_USE_LIBWEBP 0/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # DESACTIVAR FREETYPE
-          # =================================================
-
-          sed -i \
-            's/^#define LV_USE_FREETYPE .*/#define LV_USE_FREETYPE 0/' \
-            lib/lv_conf.h
-
-          # =================================================
-          # CONFIGURACION FINAL
-          # =================================================
+          echo "Usando:"
+          echo "$CONF"
 
           echo ""
           echo "=========================================="
-          echo "CONFIGURACION FINAL"
+          echo "CONFIGURANDO OPCIONES"
           echo "=========================================="
 
-          grep -E \
-            'LV_USE_IMAGE|LV_USE_TJPGD|LV_USE_FS_MEMFS|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT|LV_USE_LIBJPEG_TURBO|LV_USE_LIBPNG|LV_USE_LIBWEBP|LV_USE_FREETYPE' \
-            lib/lv_conf.h
+          python3 <<'PY'
+          from pathlib import Path
+          import re
 
-      # =====================================================
-      # LIMPIAR
-      # =====================================================
+          path = Path("lib/lv_conf.h")
+          text = path.read_text()
 
-      - name: Limpiar compilación
+          settings = {
+              # ----------------------------------------------------
+              # IMAGEN
+              # ----------------------------------------------------
+              "LV_USE_IMAGE": "1",
+
+              # ----------------------------------------------------
+              # JPEG
+              # ----------------------------------------------------
+              "LV_USE_TJPGD": "1",
+              "LV_USE_LIBJPEG_TURBO": "0",
+
+              # ----------------------------------------------------
+              # MEMFS
+              # Necesario para JPEG desde buffer en LVGL
+              # ----------------------------------------------------
+              "LV_USE_FS_MEMFS": "1",
+
+              # ----------------------------------------------------
+              # PNG
+              # ----------------------------------------------------
+              "LV_USE_LODEPNG": "1",
+              "LV_USE_LIBPNG": "0",
+
+              # ----------------------------------------------------
+              # BMP
+              # ----------------------------------------------------
+              "LV_USE_BMP": "1",
+
+              # ----------------------------------------------------
+              # GIF
+              # ----------------------------------------------------
+              "LV_USE_GIF": "1",
+
+              # ----------------------------------------------------
+              # QR
+              # ----------------------------------------------------
+              "LV_USE_QRCODE": "1",
+
+              # ----------------------------------------------------
+              # BARCODE
+              # ----------------------------------------------------
+              "LV_USE_BARCODE": "1",
+
+              # ----------------------------------------------------
+              # RLE
+              # ----------------------------------------------------
+              "LV_USE_RLE": "1",
+
+              # ----------------------------------------------------
+              # TINY TTF
+              # ----------------------------------------------------
+              "LV_USE_TINY_TTF": "1",
+              "LV_TINY_TTF_FILE_SUPPORT": "1",
+
+              # ----------------------------------------------------
+              # DESACTIVAR DECODERS PESADOS
+              # ----------------------------------------------------
+              "LV_USE_LIBWEBP": "0",
+              "LV_USE_FREETYPE": "0",
+          }
+
+          for name, value in settings.items():
+
+              # Busca:
+              # #define NAME valor
+              #
+              # También acepta espacios y tabs.
+              pattern = rf"(?m)^[ \t]*#define[ \t]+{re.escape(name)}[ \t]+[^\r\n]*$"
+
+              replacement = f"#define {name} {value}"
+
+              text, count = re.subn(
+                  pattern,
+                  replacement,
+                  text,
+                  count=1
+              )
+
+              if count == 0:
+                  print(f"WARNING: {name} no existia en lv_conf.h")
+                  print(f"Agregando: #define {name} {value}")
+                  text += f"\n#define {name} {value}\n"
+
+          path.write_text(text)
+
+          print()
+          print("Configuracion aplicada correctamente.")
+          PY
+
+
+      # ============================================================
+      # VERIFICAR CONFIGURACION
+      # ============================================================
+
+      - name: Verificar configuracion LVGL
         run: |
+          set -e
+
+          CONF="lib/lv_conf.h"
+
+          echo "=========================================="
+          echo "CONFIGURACION FINAL LVGL"
+          echo "=========================================="
+
+          grep -nE \
+            "LV_USE_IMAGE|LV_USE_TJPGD|LV_USE_FS_MEMFS|LV_USE_LODEPNG|LV_USE_LIBPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT|LV_USE_LIBJPEG_TURBO|LV_USE_LIBWEBP|LV_USE_FREETYPE" \
+            "$CONF" \
+            || true
+
+
+      # ============================================================
+      # LIMPIAR BUILD ANTERIOR
+      # ============================================================
+
+      - name: Limpiar compilacion
+        run: |
+          echo "=========================================="
+          echo "LIMPIANDO BUILD"
+          echo "=========================================="
+
           python3 make.py esp32 clean
 
-      # =====================================================
+
+      # ============================================================
       # COMPILAR
-      # =====================================================
+      #
+      # pipefail es MUY IMPORTANTE.
+      #
+      # tee guarda el log PERO conserva el codigo de salida
+      # del comando de compilacion.
+      # ============================================================
 
       - name: Compilar firmware
+        id: compile
+        continue-on-error: true
         run: |
+          set -o pipefail
+
+          echo "=========================================="
+          echo "INICIO DE COMPILACION"
+          echo "=========================================="
+
+          echo ""
+          echo "TARGET:"
+          echo "ESP32_GENERIC"
+
+          echo ""
+          echo "DISPLAY:"
+          echo "st7789"
+
+          echo ""
+          echo "INDEV:"
+          echo "xpt2046"
+
+          echo ""
+          echo "FLASH:"
+          echo "4 MB"
+
+          echo ""
+          echo "=========================================="
+          echo "MAKE.PY"
+          echo "=========================================="
 
           python3 make.py esp32 \
             BOARD=ESP32_GENERIC \
             DISPLAY=st7789 \
             INDEV=xpt2046 \
             --flash-size=4 \
-            --optimize-size
+            --optimize-size \
+            --ccache \
+            2>&1 | tee build.log
 
-      # =====================================================
-      # INSPECCIONAR BUILD
-      # =====================================================
-
-      - name: Inspeccionar build
-        if: always()
-        run: |
-
-          echo "=========================================="
-          echo "ESTRUCTURA DEL BUILD"
-          echo "=========================================="
-
-          find lib/micropython/ports/esp32/build-ESP32_GENERIC \
-            -maxdepth 3 \
-            -type f \
-            \( \
-              -name "*.bin" \
-              -o \
-              -name "*.elf" \
-            \) \
-            -printf "%s bytes -> %p\n" \
-            | sort -n
+          STATUS=${PIPESTATUS[0]}
 
           echo ""
           echo "=========================================="
-          echo "ARCHIVOS PRINCIPALES"
+          echo "CODIGO DE SALIDA DEL BUILD: $STATUS"
           echo "=========================================="
 
-          find lib/micropython/ports/esp32/build-ESP32_GENERIC \
-            -type f \
-            \( \
-              -name "micropython.bin" \
-              -o \
-              -name "firmware.bin" \
-              -o \
-              -name "bootloader.bin" \
-              -o \
-              -name "partition-table.bin" \
-              -o \
-              -name "partitions.bin" \
-            \) \
-            -print
+          exit "$STATUS"
 
-      # =====================================================
+
+      # ============================================================
+      # DIAGNOSTICO
+      #
+      # SIEMPRE SE EJECUTA.
+      # Aunque compile falle.
+      # ============================================================
+
+      - name: Diagnostico completo
+        if: always()
+        run: |
+          BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
+
+          echo ""
+          echo "############################################################"
+          echo "# DIAGNOSTICO DEL BUILD"
+          echo "############################################################"
+
+          echo ""
+          echo "============================================================"
+          echo "RESULTADO DEL STEP DE COMPILACION"
+          echo "============================================================"
+
+          echo "compile.outcome = ${{ steps.compile.outcome }}"
+          echo "compile.conclusion = ${{ steps.compile.conclusion }}"
+
+
+          # ========================================================
+          # CONFIGURACION
+          # ========================================================
+
+          echo ""
+          echo "============================================================"
+          echo "LV_CONF.H"
+          echo "============================================================"
+
+          grep -nE \
+            "LV_USE_IMAGE|LV_USE_TJPGD|LV_USE_FS_MEMFS|LV_USE_LODEPNG|LV_USE_LIBPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT|LV_USE_LIBJPEG_TURBO|LV_USE_LIBWEBP|LV_USE_FREETYPE" \
+            lib/lv_conf.h \
+            || true
+
+
+          # ========================================================
+          # BUILD DIR
+          # ========================================================
+
+          echo ""
+          echo "============================================================"
+          echo "BUILD DIRECTORY"
+          echo "============================================================"
+
+          if [ -d "$BUILD_DIR" ]; then
+            echo "$BUILD_DIR"
+          else
+            echo "NO EXISTE:"
+            echo "$BUILD_DIR"
+          fi
+
+
+          # ========================================================
+          # TODOS LOS BINARIOS
+          # ========================================================
+
+          echo ""
+          echo "============================================================"
+          echo "TODOS LOS .BIN"
+          echo "============================================================"
+
+          if [ -d "$BUILD_DIR" ]; then
+            find "$BUILD_DIR" \
+              -type f \
+              -name "*.bin" \
+              -printf "%s bytes -> %p\n" \
+              | sort -n \
+              || true
+          fi
+
+
+          # ========================================================
+          # ELF
+          # ========================================================
+
+          echo ""
+          echo "============================================================"
+          echo "TODOS LOS .ELF"
+          echo "============================================================"
+
+          if [ -d "$BUILD_DIR" ]; then
+            find "$BUILD_DIR" \
+              -type f \
+              -name "*.elf" \
+              -printf "%s bytes -> %p\n" \
+              | sort -n \
+              || true
+          fi
+
+
+          # ========================================================
+          # ARCHIVOS IMPORTANTES
+          # ========================================================
+
+          echo ""
+          echo "============================================================"
+          echo "ARCHIVOS IMPORTANTES"
+          echo "============================================================"
+
+          for f in \
+            "$BUILD_DIR/micropython.bin" \
+            "$BUILD_DIR/firmware.bin" \
+            "$BUILD_DIR/bootloader/bootloader.bin" \
+            "$BUILD_DIR/partition_table/partition-table.bin" \
+            "$BUILD_DIR/partitions.bin" \
+            "$BUILD_DIR/application.bin"
+          do
+            if [ -f "$f" ]; then
+              echo "ENCONTRADO: $f"
+              ls -lh "$f"
+            else
+              echo "FALTA:      $f"
+            fi
+          done
+
+
+          # ========================================================
+          # LOG PRINCIPAL
+          # ========================================================
+
+          echo ""
+          echo "============================================================"
+          echo "ERRORES DETECTADOS EN build.log"
+          echo "============================================================"
+
+          if [ -f build.log ]; then
+
+            grep -inE \
+              "error:|fatal error|ERROR:|FAILED|failed|failure|ninja:|ninja failed|partition|too small|overflow|No space|undefined reference|ld returned|collect2|CMake Error|Traceback|Exception" \
+              build.log \
+              | tail -n 250 \
+              || true
+
+          else
+            echo "NO EXISTE build.log"
+          fi
+
+
+          # ========================================================
+          # ULTIMAS 250 LINEAS
+          # ========================================================
+
+          echo ""
+          echo "============================================================"
+          echo "ULTIMAS 250 LINEAS DEL BUILD"
+          echo "============================================================"
+
+          if [ -f build.log ]; then
+            tail -n 250 build.log
+          fi
+
+
+          # ========================================================
+          # LOGS INTERNOS DE ESP-IDF
+          # ========================================================
+
+          echo ""
+          echo "============================================================"
+          echo "LOGS INTERNOS ESP-IDF"
+          echo "============================================================"
+
+          if [ -d "$BUILD_DIR/log" ]; then
+
+            find "$BUILD_DIR/log" \
+              -maxdepth 2 \
+              -type f \
+              -print \
+              || true
+
+            echo ""
+            echo "CONTENIDO DE LOGS:"
+
+            find "$BUILD_DIR/log" \
+              -maxdepth 2 \
+              -type f \
+              -print0 \
+              | while IFS= read -r -d '' file
+              do
+                echo ""
+                echo "------------------------------------------------------------"
+                echo "$file"
+                echo "------------------------------------------------------------"
+
+                tail -n 100 "$file" || true
+              done
+
+          else
+            echo "No existe $BUILD_DIR/log"
+          fi
+
+
+          # ========================================================
+          # CMAKE CACHE
+          # ========================================================
+
+          echo ""
+          echo "============================================================"
+          echo "DATOS CMAKE"
+          echo "============================================================"
+
+          if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+
+            grep -E \
+              "CMAKE_BUILD_TYPE|CMAKE_C_COMPILER|IDF_TARGET|MICROPY|LVGL" \
+              "$BUILD_DIR/CMakeCache.txt" \
+              | head -n 200 \
+              || true
+
+          fi
+
+
+          # ========================================================
+          # TAMAÑOS
+          # ========================================================
+
+          echo ""
+          echo "============================================================"
+          echo "RESUMEN DE TAMAÑOS"
+          echo "============================================================"
+
+          if [ -d "$BUILD_DIR" ]; then
+
+            du -sh "$BUILD_DIR" 2>/dev/null || true
+
+            echo ""
+            echo "Archivos grandes:"
+
+            find "$BUILD_DIR" \
+              -type f \
+              -printf "%s %p\n" \
+              | sort -n \
+              | tail -n 50 \
+              || true
+
+          fi
+
+
+      # ============================================================
       # PREPARAR FIRMWARE
-      # =====================================================
+      #
+      # SOLO SI LA COMPILACION TERMINO BIEN.
+      # ============================================================
 
       - name: Preparar firmware
+        if: steps.compile.outcome == 'success'
         run: |
-
           set -e
-
-          mkdir -p final_firmware
 
           BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
 
-          echo "=========================================="
-          echo "BUILD DIRECTORY"
-          echo "=========================================="
+          mkdir -p final_firmware
 
-          echo "$BUILD_DIR"
-
-          echo ""
           echo "=========================================="
-          echo "BINARIOS"
+          echo "PREPARANDO FIRMWARE"
           echo "=========================================="
 
-          find "$BUILD_DIR" \
-            -type f \
-            \( \
-              -name "*.bin" \
-              -o \
-              -name "*.elf" \
-            \) \
-            -printf "%s bytes -> %p\n" \
-            | sort -n
 
-          # =================================================
+          # --------------------------------------------------------
           # MICROPYTHON
-          # =================================================
+          # --------------------------------------------------------
 
           if [ -f "$BUILD_DIR/micropython.bin" ]; then
 
-            cp "$BUILD_DIR/micropython.bin" \
+            cp \
+              "$BUILD_DIR/micropython.bin" \
               final_firmware/micropython.bin
 
           else
 
             echo ""
-            echo "ERROR:"
-            echo "NO SE ENCONTRO micropython.bin"
+            echo "ERROR: micropython.bin no existe."
             echo ""
-            echo "Esto significa que la compilacion no genero"
-            echo "la aplicacion MicroPython."
-            echo ""
+
+            find "$BUILD_DIR" \
+              -type f \
+              -name "*.bin" \
+              -print
 
             exit 1
 
           fi
 
-          # =================================================
+
+          # --------------------------------------------------------
           # BOOTLOADER
-          # =================================================
+          # --------------------------------------------------------
 
           if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
 
-            cp "$BUILD_DIR/bootloader/bootloader.bin" \
+            cp \
+              "$BUILD_DIR/bootloader/bootloader.bin" \
               final_firmware/bootloader.bin
 
           else
 
-            echo ""
-            echo "ERROR:"
-            echo "NO SE ENCONTRO bootloader.bin"
-
+            echo "ERROR: bootloader.bin no existe."
             exit 1
 
           fi
 
-          # =================================================
+
+          # --------------------------------------------------------
           # PARTITION TABLE
-          # =================================================
+          # --------------------------------------------------------
 
           if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
 
-            cp "$BUILD_DIR/partition_table/partition-table.bin" \
+            cp \
+              "$BUILD_DIR/partition_table/partition-table.bin" \
               final_firmware/partition-table.bin
 
           else
 
-            echo ""
-            echo "ERROR:"
-            echo "NO SE ENCONTRO partition-table.bin"
-
+            echo "ERROR: partition-table.bin no existe."
             exit 1
 
           fi
 
-          # =================================================
+
+          # --------------------------------------------------------
           # FIRMWARE COMBINADO
-          # =================================================
+          # --------------------------------------------------------
 
           if [ -f "$BUILD_DIR/firmware.bin" ]; then
 
-            cp "$BUILD_DIR/firmware.bin" \
+            cp \
+              "$BUILD_DIR/firmware.bin" \
               final_firmware/firmware.bin
 
           fi
 
-          # =================================================
+
+          # --------------------------------------------------------
           # RESULTADO
-          # =================================================
+          # --------------------------------------------------------
 
           echo ""
           echo "=========================================="
@@ -378,17 +624,18 @@ jobs:
 
           ls -lah final_firmware
 
-      # =====================================================
+
+      # ============================================================
       # VERIFICAR
-      # =====================================================
+      # ============================================================
 
       - name: Verificar firmware
+        if: steps.compile.outcome == 'success'
         run: |
-
           set -e
 
           echo "=========================================="
-          echo "VERIFICANDO FIRMWARE"
+          echo "VERIFICACION"
           echo "=========================================="
 
           test -f final_firmware/micropython.bin
@@ -396,34 +643,74 @@ jobs:
           test -f final_firmware/partition-table.bin
 
           echo ""
-          echo "MICROPYTHON:"
-          ls -lh final_firmware/micropython.bin
+          echo "OK:"
+          echo "micropython.bin"
+          echo "bootloader.bin"
+          echo "partition-table.bin"
 
-          echo ""
-          echo "BOOTLOADER:"
-          ls -lh final_firmware/bootloader.bin
 
-          echo ""
-          echo "PARTITION TABLE:"
-          ls -lh final_firmware/partition-table.bin
-
-          if [ -f final_firmware/firmware.bin ]; then
-            echo ""
-            echo "FIRMWARE COMBINADO:"
-            ls -lh final_firmware/firmware.bin
-          fi
-
-          echo ""
-          echo "=========================================="
-          echo "FIRMWARE CORRECTO"
-          echo "=========================================="
-
-      # =====================================================
-      # SUBIR ARTIFACT
-      # =====================================================
+      # ============================================================
+      # SUBIR FIRMWARE
+      # ============================================================
 
       - name: Subir firmware
+        if: steps.compile.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: lvgl-micropython-cyd-st7789
           path: final_firmware/
+          if-no-files-found: error
+
+
+      # ============================================================
+      # SUBIR LOGS
+      #
+      # ESTO SE EJECUTA INCLUSO SI FALLA LA COMPILACION.
+      # ============================================================
+
+      - name: Subir logs de diagnostico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lvgl-micropython-build-logs
+          path: |
+            build.log
+            lib/micropython/ports/esp32/build-ESP32_GENERIC/log/
+          if-no-files-found: warn
+
+
+      # ============================================================
+      # FALLAR EL WORKFLOW SI EL BUILD FALLO
+      #
+      # Lo hacemos AL FINAL para que antes se hayan subido
+      # los logs y podamos saber qué demonios pasó.
+      # ============================================================
+
+      - name: Resultado final
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "RESULTADO FINAL"
+          echo "=========================================="
+
+          if [ "${{ steps.compile.outcome }}" != "success" ]; then
+
+            echo ""
+            echo "=========================================="
+            echo "LA COMPILACION FALLO"
+            echo "=========================================="
+
+            echo ""
+            echo "Los logs completos fueron guardados"
+            echo "como artifact:"
+            echo ""
+            echo "lvgl-micropython-build-logs"
+
+            exit 1
+
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "COMPILACION EXITOSA"
+          echo "=========================================="
