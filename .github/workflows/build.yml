@@ -61,8 +61,16 @@ jobs:
           echo "CONFIGURACION ORIGINAL:"
 
           grep -E \
-            'LV_USE_TJPGD|LV_USE_FS_MEMFS|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT' \
+            'LV_USE_IMAGE|LV_USE_TJPGD|LV_USE_FS_MEMFS|LV_USE_LODEPNG|LV_USE_BMP|LV_USE_GIF|LV_USE_QRCODE|LV_USE_BARCODE|LV_USE_RLE|LV_USE_TINY_TTF|LV_TINY_TTF_FILE_SUPPORT|LV_USE_LIBJPEG_TURBO|LV_USE_LIBPNG|LV_USE_LIBWEBP|LV_USE_FREETYPE' \
             lib/lv_conf.h || true
+
+          # -------------------------------------------------
+          # Activar IMAGE
+          # -------------------------------------------------
+
+          sed -i \
+            's/^#define LV_USE_IMAGE .*/#define LV_USE_IMAGE 1/' \
+            lib/lv_conf.h
 
           # -------------------------------------------------
           # Activar JPEG / TJPGD
@@ -74,7 +82,9 @@ jobs:
 
           # -------------------------------------------------
           # Activar MEMFS
-          # Necesario para JPEG desde memoria
+          #
+          # Necesario para decodificar JPEG almacenado
+          # directamente en memoria.
           # -------------------------------------------------
 
           sed -i \
@@ -165,14 +175,6 @@ jobs:
             's/^#define LV_USE_FREETYPE .*/#define LV_USE_FREETYPE 0/' \
             lib/lv_conf.h
 
-          # -------------------------------------------------
-          # Asegurar IMAGE
-          # -------------------------------------------------
-
-          sed -i \
-            's/^#define LV_USE_IMAGE .*/#define LV_USE_IMAGE 1/' \
-            lib/lv_conf.h
-
           # =================================================
           # MOSTRAR CONFIGURACION FINAL
           # =================================================
@@ -213,6 +215,7 @@ jobs:
 
       - name: Buscar firmware generado
         run: |
+
           echo "=========================================="
           echo "BINARIOS GENERADOS"
           echo "=========================================="
@@ -225,13 +228,26 @@ jobs:
 
       - name: Preparar firmware
         run: |
+
           mkdir -p final_firmware
+
+          echo "=========================================="
+          echo "BUSCANDO BOOTLOADER"
+          echo "=========================================="
 
           find . -type f -name "bootloader.bin" \
             -exec cp {} final_firmware/ \;
 
+          echo "=========================================="
+          echo "BUSCANDO PARTITION TABLE"
+          echo "=========================================="
+
           find . -type f -name "partition-table.bin" \
             -exec cp {} final_firmware/ \;
+
+          echo "=========================================="
+          echo "BUSCANDO MICROPYTHON"
+          echo "=========================================="
 
           find . -type f -name "micropython.bin" \
             -exec cp {} final_firmware/ \;
@@ -241,7 +257,7 @@ jobs:
           echo "FIRMWARE FINAL"
           echo "=========================================="
 
-          ls -lh final_firmware
+          ls -lah final_firmware
 
       # =====================================================
       # VERIFICAR FIRMWARE
@@ -254,12 +270,59 @@ jobs:
           echo "VERIFICANDO"
           echo "=========================================="
 
-          test -f final_firmware/micropython.bin
-          test -f final_firmware/bootloader.bin
-          test -f final_firmware/partition-table.bin
+          echo ""
+          echo "ARCHIVOS EN final_firmware:"
+          echo ""
+
+          ls -lah final_firmware
 
           echo ""
+          echo "=========================================="
+          echo "COMPROBANDO ARCHIVOS"
+          echo "=========================================="
+
+          ERROR=0
+
+          if [ -f final_firmware/micropython.bin ]; then
+            echo "OK: micropython.bin"
+          else
+            echo "FALTA: micropython.bin"
+            ERROR=1
+          fi
+
+          if [ -f final_firmware/bootloader.bin ]; then
+            echo "OK: bootloader.bin"
+          else
+            echo "FALTA: bootloader.bin"
+            ERROR=1
+          fi
+
+          if [ -f final_firmware/partition-table.bin ]; then
+            echo "OK: partition-table.bin"
+          else
+            echo "FALTA: partition-table.bin"
+            ERROR=1
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "TODOS LOS .BIN EN EL PROYECTO"
+          echo "=========================================="
+
+          find . -type f -name "*.bin" -print
+
+          echo ""
+
+          if [ "$ERROR" -ne 0 ]; then
+            echo "=========================================="
+            echo "ERROR: FALTA UNO O MAS BINARIOS"
+            echo "=========================================="
+            exit 1
+          fi
+
+          echo "=========================================="
           echo "TODOS LOS BINARIOS ESTAN PRESENTES"
+          echo "=========================================="
 
       # =====================================================
       # SUBIR ARTIFACT
