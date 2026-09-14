@@ -8,24 +8,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ============================================================
-      # 1. CLONAR REPOSITORIO LVGL MICROPYTHON (CON SUBMODULOS)
-      # ============================================================
+
       - name: Clonar LVGL MicroPython
         run: |
           git clone --recursive https://github.com/lvgl-micropython/lvgl_micropython.git .
 
-      # ============================================================
-      # 2. CONFIGURAR PYTHON EN EL RUNNER
-      # ============================================================
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # ============================================================
-      # 3. INSTALAR DEPENDENCIAS DE COMPILACION
-      # ============================================================
       - name: Instalar dependencias
         run: |
           sudo apt-get update
@@ -34,23 +26,13 @@ jobs:
             cmake \
             ninja-build \
             ccache \
-            libusb-1.0-0-dev \
-            python3-venv
+            libusb-1.0-0-dev
 
-      # ============================================================
-      # 4. COMPILAR FIRMWARE ESP32 CON BINDINGS Y DECODIFICADORES
-      # ============================================================
       - name: Compilar firmware ESP32
         id: compile
         run: |
           set -o pipefail
 
-          # Se define LV_CFLAGS inyectando directivas C explícitas para LVGL 9:
-          # -LV_KCONFIG_IGNORE=1  : Ignora los valores predeterminados de Kconfig.
-          # -DLV_USE_TJPGD=1      : Habilita el decodificador TJPGD en C.
-          # -DLV_USE_LODEPNG=1    : Habilita el decodificador PNG.
-          # -DLV_USE_FS_STDIO=1   : Activa el Driver FS para leer desde la Flash.
-          # -DLV_FS_STDIO_LETTER='S' : Mapea las rutas con la letra 'S:'.
           python3 make.py esp32 \
             BOARD=ESP32_GENERIC \
             DISPLAY=st7789 \
@@ -58,22 +40,20 @@ jobs:
             --flash-size=4 \
             --optimize-size \
             --ccache \
-            LV_CFLAGS="-DLV_KCONFIG_IGNORE=1 -DLV_USE_TJPGD=1 -DLV_USE_LODEPNG=1 -DLV_USE_BMP=1 -DLV_USE_GIF=1 -DLV_USE_FS_STDIO=1 -DLV_FS_STDIO_LETTER=83" \
+            LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-      # ============================================================
-      # 5. ESTRUCTURAR BINARIOS FINAL PARA FLASHEO
-      # ============================================================
       - name: Preparar firmware final
         if: success()
         run: |
           BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
+
           mkdir -p final_firmware
 
           if [ -f "$BUILD_DIR/firmware.bin" ]; then
             cp "$BUILD_DIR/firmware.bin" final_firmware/firmware.bin
           fi
-          
+
           if [ -f "$BUILD_DIR/micropython.bin" ]; then
             cp "$BUILD_DIR/micropython.bin" final_firmware/micropython.bin
           fi
@@ -88,17 +68,14 @@ jobs:
 
           ls -lh final_firmware/
 
-      # ============================================================
-      # 6. SUBIR ARTEFACTOS GENERADOS
-      # ============================================================
-      - name: Subir Firmware Final
+      - name: Subir Firmware
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: firmware-cyd-st7789
           path: final_firmware/
 
-      - name: Subir Logs de Compilación
+      - name: Subir Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
