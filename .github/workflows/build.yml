@@ -54,7 +54,7 @@ jobs:
           echo "=========================================="
 
           echo ""
-          echo "VERSION / CONFIGURACION ORIGINAL"
+          echo "CONFIGURACION ORIGINAL"
           echo "=========================================="
 
           grep -E \
@@ -80,8 +80,7 @@ jobs:
           # =================================================
           # MEMFS
           #
-          # Necesario para decodificar JPEG almacenado
-          # como buffer en memoria.
+          # Necesario para JPEG desde memoria
           # =================================================
 
           sed -i \
@@ -145,7 +144,7 @@ jobs:
             lib/lv_conf.h
 
           # =================================================
-          # TINY TTF DESDE ARCHIVO
+          # TTF DESDE ARCHIVO
           # =================================================
 
           sed -i \
@@ -153,7 +152,7 @@ jobs:
             lib/lv_conf.h
 
           # =================================================
-          # DESACTIVAR JPEG TURBO
+          # DESACTIVAR LIBJPEG TURBO
           # =================================================
 
           sed -i \
@@ -185,7 +184,7 @@ jobs:
             lib/lv_conf.h
 
           # =================================================
-          # MOSTRAR CONFIGURACION FINAL
+          # CONFIGURACION FINAL
           # =================================================
 
           echo ""
@@ -211,6 +210,7 @@ jobs:
 
       - name: Compilar firmware
         run: |
+
           python3 make.py esp32 \
             BOARD=ESP32_GENERIC \
             DISPLAY=st7789 \
@@ -219,42 +219,46 @@ jobs:
             --optimize-size
 
       # =====================================================
-      # BUSCAR MICROPYTHON.BIN
+      # INSPECCIONAR BUILD
       # =====================================================
 
-      - name: Buscar firmware real
+      - name: Inspeccionar build
+        if: always()
         run: |
 
           echo "=========================================="
-          echo "BUSCANDO MICROPYTHON.BIN"
+          echo "ESTRUCTURA DEL BUILD"
           echo "=========================================="
 
-          find . \
+          find lib/micropython/ports/esp32/build-ESP32_GENERIC \
+            -maxdepth 3 \
             -type f \
-            -path "*/build-ESP32_GENERIC/*" \
-            -name "micropython.bin" \
-            -print
+            \( \
+              -name "*.bin" \
+              -o \
+              -name "*.elf" \
+            \) \
+            -printf "%s bytes -> %p\n" \
+            | sort -n
 
           echo ""
           echo "=========================================="
-          echo "BUSCANDO BOOTLOADER"
+          echo "ARCHIVOS PRINCIPALES"
           echo "=========================================="
 
-          find . \
+          find lib/micropython/ports/esp32/build-ESP32_GENERIC \
             -type f \
-            -path "*/build-ESP32_GENERIC/*" \
-            -name "bootloader.bin" \
-            -print
-
-          echo ""
-          echo "=========================================="
-          echo "BUSCANDO PARTITION TABLE"
-          echo "=========================================="
-
-          find . \
-            -type f \
-            -path "*/build-ESP32_GENERIC/*" \
-            -name "partition-table.bin" \
+            \( \
+              -name "micropython.bin" \
+              -o \
+              -name "firmware.bin" \
+              -o \
+              -name "bootloader.bin" \
+              -o \
+              -name "partition-table.bin" \
+              -o \
+              -name "partitions.bin" \
+            \) \
             -print
 
       # =====================================================
@@ -268,88 +272,103 @@ jobs:
 
           mkdir -p final_firmware
 
-          # -------------------------------------------------
-          # Encontrar MICROPYTHON
-          # -------------------------------------------------
-
-          MICROPYTHON_BIN=$(find . \
-            -type f \
-            -path "*/build-ESP32_GENERIC/*" \
-            -name "micropython.bin" \
-            -print -quit)
-
-          # -------------------------------------------------
-          # Encontrar BOOTLOADER
-          # -------------------------------------------------
-
-          BOOTLOADER_BIN=$(find . \
-            -type f \
-            -path "*/build-ESP32_GENERIC/*" \
-            -name "bootloader.bin" \
-            -print -quit)
-
-          # -------------------------------------------------
-          # Encontrar PARTITION TABLE
-          # -------------------------------------------------
-
-          PARTITION_BIN=$(find . \
-            -type f \
-            -path "*/build-ESP32_GENERIC/*" \
-            -name "partition-table.bin" \
-            -print -quit)
+          BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
 
           echo "=========================================="
-          echo "ARCHIVOS ENCONTRADOS"
+          echo "BUILD DIRECTORY"
           echo "=========================================="
 
-          echo "MICROPYTHON:"
-          echo "$MICROPYTHON_BIN"
+          echo "$BUILD_DIR"
 
           echo ""
-          echo "BOOTLOADER:"
-          echo "$BOOTLOADER_BIN"
+          echo "=========================================="
+          echo "BINARIOS"
+          echo "=========================================="
 
-          echo ""
-          echo "PARTITION TABLE:"
-          echo "$PARTITION_BIN"
-
-          # -------------------------------------------------
-          # Verificar que existen
-          # -------------------------------------------------
-
-          if [ -z "$MICROPYTHON_BIN" ]; then
-            echo ""
-            echo "ERROR: NO SE ENCONTRO micropython.bin"
-            exit 1
-          fi
-
-          if [ -z "$BOOTLOADER_BIN" ]; then
-            echo ""
-            echo "ERROR: NO SE ENCONTRO bootloader.bin"
-            exit 1
-          fi
-
-          if [ -z "$PARTITION_BIN" ]; then
-            echo ""
-            echo "ERROR: NO SE ENCONTRO partition-table.bin"
-            exit 1
-          fi
-
-          # -------------------------------------------------
-          # Copiar
-          # -------------------------------------------------
-
-          cp "$MICROPYTHON_BIN" \
-            final_firmware/micropython.bin
-
-          cp "$BOOTLOADER_BIN" \
-            final_firmware/bootloader.bin
-
-          cp "$PARTITION_BIN" \
-            final_firmware/partition-table.bin
+          find "$BUILD_DIR" \
+            -type f \
+            \( \
+              -name "*.bin" \
+              -o \
+              -name "*.elf" \
+            \) \
+            -printf "%s bytes -> %p\n" \
+            | sort -n
 
           # =================================================
-          # MOSTRAR RESULTADO
+          # MICROPYTHON
+          # =================================================
+
+          if [ -f "$BUILD_DIR/micropython.bin" ]; then
+
+            cp "$BUILD_DIR/micropython.bin" \
+              final_firmware/micropython.bin
+
+          else
+
+            echo ""
+            echo "ERROR:"
+            echo "NO SE ENCONTRO micropython.bin"
+            echo ""
+            echo "Esto significa que la compilacion no genero"
+            echo "la aplicacion MicroPython."
+            echo ""
+
+            exit 1
+
+          fi
+
+          # =================================================
+          # BOOTLOADER
+          # =================================================
+
+          if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
+
+            cp "$BUILD_DIR/bootloader/bootloader.bin" \
+              final_firmware/bootloader.bin
+
+          else
+
+            echo ""
+            echo "ERROR:"
+            echo "NO SE ENCONTRO bootloader.bin"
+
+            exit 1
+
+          fi
+
+          # =================================================
+          # PARTITION TABLE
+          # =================================================
+
+          if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
+
+            cp "$BUILD_DIR/partition_table/partition-table.bin" \
+              final_firmware/partition-table.bin
+
+          else
+
+            echo ""
+            echo "ERROR:"
+            echo "NO SE ENCONTRO partition-table.bin"
+
+            exit 1
+
+          fi
+
+          # =================================================
+          # FIRMWARE COMBINADO
+          # =================================================
+
+          if [ -f "$BUILD_DIR/firmware.bin" ]; then
+
+            cp "$BUILD_DIR/firmware.bin" \
+              final_firmware/firmware.bin
+
+          fi
+
+          # =================================================
+          # RESULTADO
           # =================================================
 
           echo ""
@@ -357,10 +376,10 @@ jobs:
           echo "FIRMWARE FINAL"
           echo "=========================================="
 
-          ls -lh final_firmware
+          ls -lah final_firmware
 
       # =====================================================
-      # VERIFICAR FIRMWARE
+      # VERIFICAR
       # =====================================================
 
       - name: Verificar firmware
@@ -377,20 +396,26 @@ jobs:
           test -f final_firmware/partition-table.bin
 
           echo ""
-          echo "micropython.bin:"
+          echo "MICROPYTHON:"
           ls -lh final_firmware/micropython.bin
 
           echo ""
-          echo "bootloader.bin:"
+          echo "BOOTLOADER:"
           ls -lh final_firmware/bootloader.bin
 
           echo ""
-          echo "partition-table.bin:"
+          echo "PARTITION TABLE:"
           ls -lh final_firmware/partition-table.bin
+
+          if [ -f final_firmware/firmware.bin ]; then
+            echo ""
+            echo "FIRMWARE COMBINADO:"
+            ls -lh final_firmware/firmware.bin
+          fi
 
           echo ""
           echo "=========================================="
-          echo "TODOS LOS BINARIOS ESTAN PRESENTES"
+          echo "FIRMWARE CORRECTO"
           echo "=========================================="
 
       # =====================================================
