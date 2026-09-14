@@ -9,13 +9,11 @@ jobs:
 
     steps:
       # ============================================================
-      # 1. CLONAR REPOSITORIO CON SUBMODULOS
+      # 1. CLONAR LVGL MICROPYTHON
       # ============================================================
-      - name: Clonar repositorio
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
+      - name: Clonar LVGL MicroPython
+        run: |
+          git clone --recursive https://github.com/lvgl-micropython/lvgl_micropython.git .
 
       # ============================================================
       # 2. CONFIGURAR PYTHON
@@ -26,7 +24,7 @@ jobs:
           python-version: "3.11"
 
       # ============================================================
-      # 3. INSTALAR DEPENDENCIAS DE SISTEMA
+      # 3. INSTALAR DEPENDENCIAS
       # ============================================================
       - name: Instalar dependencias
         run: |
@@ -36,7 +34,6 @@ jobs:
             cmake \
             ninja-build \
             ccache \
-            git \
             libusb-1.0-0-dev
 
       # ============================================================
@@ -46,9 +43,6 @@ jobs:
         id: compile
         run: |
           set -o pipefail
-
-          # Definir versión estable de ESP-IDF para MicroPython
-          export IDF_VER="v5.2.2"
 
           python3 make.py esp32 \
             BOARD=ESP32_GENERIC \
@@ -61,7 +55,7 @@ jobs:
             2>&1 | tee build.log
 
       # ============================================================
-      # 5. PREPARAR Y ORGANIZAR BINARIOS
+      # 5. PREPARAR FIRMWARE FINAL
       # ============================================================
       - name: Preparar firmware final
         if: success()
@@ -97,7 +91,7 @@ jobs:
           name: firmware-cyd-st7789
           path: final_firmware/
 
-      - name: Subir Logs en caso de error
+      - name: Subir Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
