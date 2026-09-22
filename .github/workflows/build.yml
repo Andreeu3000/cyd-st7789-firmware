@@ -28,169 +28,178 @@ jobs:
             ccache \
             libusb-1.0-0-dev
 
-      - name: Crear módulo C WiFi Clients
+      - name: Añadir soporte nativo para IPs de clientes WiFi
         run: |
-          mkdir -p ext_mod/wifi_clients
+          python3 - <<'PY'
+          from pathlib import Path
 
-          cat > ext_mod/wifi_clients/wifi_clients.c <<'EOF'
-          #include "py/runtime.h"
-          #include "py/obj.h"
+          source = Path(
+              "lib/micropython/ports/esp32/network_wlan.c"
+          )
 
-          #include "esp_err.h"
-          #include "esp_wifi.h"
-          #include "esp_wifi_ap_get_sta_list.h"
+          update = Path(
+              "micropy_updates/esp32/network_wlan.c"
+          )
 
-          #include "lwip/ip4_addr.h"
+          def patch(text):
+              include_anchor = '#include "esp_wifi.h"\n'
 
-          #include <stdio.h>
-          #include <string.h>
+              if '#include "esp_wifi_ap_get_sta_list.h"' not in text:
+                  if include_anchor not in text:
+                      raise RuntimeError(
+                          'No se encontró #include "esp_wifi.h"'
+                      )
 
+                  text = text.replace(
+                      include_anchor,
+                      include_anchor +
+                      '#include "esp_wifi_ap_get_sta_list.h"\n'
+                      '#include <stdio.h>\n',
+                      1
+                  )
 
-          static mp_obj_t wifi_clients_get(void)
-          {
-              wifi_sta_list_t sta_list;
-              wifi_sta_mac_ip_list_t ip_list;
+              marker = (
+                  '        case (uintptr_t)MP_OBJ_NEW_QSTR('
+                  'MP_QSTR_rssi): {\n'
+              )
 
-              memset(&sta_list, 0, sizeof(sta_list));
-              memset(&ip_list, 0, sizeof(ip_list));
+              if 'MP_QSTR_stations_ip' not in text:
 
-              esp_err_t err;
+                  if marker not in text:
+                      raise RuntimeError(
+                          'No se encontró el bloque case de rssi'
+                      )
 
-              /*
-               * Obtener estaciones asociadas al SoftAP.
-               */
-              err = esp_wifi_ap_get_sta_list(&sta_list);
+                  new_case = '''        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations_ip): {
+              // Lista de clientes del SoftAP con sus IP.
+              require_if(args[0], ESP_IF_WIFI_AP);
 
-              if (err != ESP_OK) {
-                  return mp_obj_new_list(0, NULL);
-              }
+              wifi_sta_list_t station_list = {0};
+              wifi_sta_mac_ip_list_t station_ip_list = {0};
 
-              /*
-               * Obtener IP de cada estación.
-               *
-               * Esta API utiliza la información del DHCP del
-               * SoftAP y también puede consultar ARP.
-               */
-              err = esp_wifi_ap_get_sta_list_with_ip(
-                  &sta_list,
-                  &ip_list
+              // Obtener estaciones asociadas por MAC.
+              esp_exceptions(
+                  esp_wifi_ap_get_sta_list(&station_list)
               );
 
-              if (err != ESP_OK) {
-                  return mp_obj_new_list(0, NULL);
-              }
+              // Obtener IPs mediante DHCP/ARP.
+              esp_exceptions(
+                  esp_wifi_ap_get_sta_list_with_ip(
+                      &station_list,
+                      &station_ip_list
+                  )
+              );
 
-              mp_obj_t result = mp_obj_new_list(0, NULL);
+              mp_obj_t list = mp_obj_new_list(0, NULL);
 
-              for (int i = 0; i < ip_list.num; i++) {
+              for (int i = 0; i < station_ip_list.num; ++i) {
 
-                  char mac[18];
-                  char ip[16];
+                  char ip_str[16];
 
+                  /*
+                   * IP2STR utiliza los bytes en el orden correcto
+                   * definido por ESP-IDF.
+                   */
                   snprintf(
-                      mac,
-                      sizeof(mac),
-                      "%02X:%02X:%02X:%02X:%02X:%02X",
-                      ip_list.sta[i].mac[0],
-                      ip_list.sta[i].mac[1],
-                      ip_list.sta[i].mac[2],
-                      ip_list.sta[i].mac[3],
-                      ip_list.sta[i].mac[4],
-                      ip_list.sta[i].mac[5]
+                      ip_str,
+                      sizeof(ip_str),
+                      IPSTR,
+                      IP2STR(&station_ip_list.sta[i].ip)
                   );
 
-                  ip4addr_ntoa_r(
-                      &ip_list.sta[i].ip,
-                      ip,
-                      sizeof(ip)
+                  mp_obj_tuple_t *t =
+                      mp_obj_new_tuple(2, NULL);
+
+                  /*
+                   * Elemento 0:
+                   * MAC como bytes, igual que status("stations")
+                   */
+                  t->items[0] = mp_obj_new_bytes(
+                      station_ip_list.sta[i].mac,
+                      sizeof(station_ip_list.sta[i].mac)
                   );
 
-                  mp_obj_t items[2];
+                  /*
+                   * Elemento 1:
+                   * IP como string.
+                   */
+                  t->items[1] =
+                      mp_obj_new_str_from_cstr(ip_str);
 
-                  items[0] = mp_obj_new_str(
-                      mac,
-                      strlen(mac)
-                  );
-
-                  items[1] = mp_obj_new_str(
-                      ip,
-                      strlen(ip)
-                  );
-
-                  mp_obj_list_append(
-                      result,
-                      mp_obj_new_tuple(2, items)
-                  );
+                  mp_obj_list_append(list, t);
               }
 
-              return result;
+              return list;
           }
+  '''
 
+                  text = text.replace(
+                      marker,
+                      new_case + marker,
+                      1
+                  )
 
-          static MP_DEFINE_CONST_FUN_OBJ_0(
-              wifi_clients_get_obj,
-              wifi_clients_get
-          );
+              return text
 
+          if not source.exists():
+              raise RuntimeError(
+                  f'No existe: {source}'
+              )
 
-          static const mp_rom_map_elem_t wifi_clients_globals_table[] = {
+          original = source.read_text()
+          patched = patch(original)
 
-              {
-                  MP_ROM_QSTR(MP_QSTR___name__),
-                  MP_ROM_QSTR(MP_QSTR_wifi_clients)
-              },
+          if patched == original:
+              raise RuntimeError(
+                  'El parche no modificó network_wlan.c'
+              )
 
-              {
-                  MP_ROM_QSTR(MP_QSTR_get),
-                  MP_ROM_PTR(&wifi_clients_get_obj)
-              },
+          source.write_text(patched)
 
-          };
-
-
-          static MP_DEFINE_CONST_DICT(
-              wifi_clients_globals,
-              wifi_clients_globals_table
-          );
-
-
-          const mp_obj_module_t wifi_clients_user_cmodule = {
-              .base = { &mp_type_module },
-              .globals = (mp_obj_dict_t *)&wifi_clients_globals,
-          };
-
-
-          MP_REGISTER_MODULE(
-              MP_QSTR_wifi_clients,
-              wifi_clients_user_cmodule
-          );
-          EOF
-
-
-          cat > ext_mod/wifi_clients/micropython.cmake <<'EOF'
-          add_library(usermod_wifi_clients INTERFACE)
-
-          target_sources(usermod_wifi_clients INTERFACE
-              ${CMAKE_CURRENT_LIST_DIR}/wifi_clients.c
+          /*
+           * lvgl_micropython ejecuta copy_micropy_updates()
+           * durante make.py, así que también dejamos la versión
+           * modificada en micropy_updates/esp32.
+           *
+           * Si ya existía un update propio, lo parcheamos en vez
+           * de reemplazarlo ciegamente.
+           */
+          update.parent.mkdir(
+              parents=True,
+              exist_ok=True
           )
 
-          target_link_libraries(usermod INTERFACE
-              usermod_wifi_clients
-          )
-          EOF
+          if update.exists():
+              update_text = update.read_text()
+              update.write_text(patch(update_text))
+          else:
+              update.write_text(patched)
 
-      - name: Verificar módulo C
+          print("Parche aplicado correctamente.")
+          print()
+          print("Comprobando MP_QSTR_stations_ip:")
+
+          final_text = update.read_text()
+
+          if "MP_QSTR_stations_ip" not in final_text:
+              raise RuntimeError(
+                  "MP_QSTR_stations_ip no quedó en el archivo"
+              )
+
+          print("OK: stations_ip")
+          PY
+
+      - name: Mostrar parche WiFi
         run: |
-          echo "=== MÓDULO C ==="
-          ls -lh ext_mod/wifi_clients/
+          echo "========================================"
+          echo "       VERIFICACIÓN DEL PARCHE"
+          echo "========================================"
 
-          echo
-          echo "=== CMAKE ==="
-          cat ext_mod/wifi_clients/micropython.cmake
-
-          echo
-          echo "=== C ==="
-          sed -n '1,240p' ext_mod/wifi_clients/wifi_clients.c
+          grep -n \
+            -A55 \
+            -B5 \
+            "MP_QSTR_stations_ip" \
+            micropy_updates/esp32/network_wlan.c
 
       - name: Compilar firmware ESP32
         id: compile
@@ -201,39 +210,48 @@ jobs:
             BOARD=ESP32_GENERIC \
             DISPLAY=st7789 \
             INDEV=xpt2046 \
-            USER_C_MODULE="$GITHUB_WORKSPACE/ext_mod/wifi_clients/micropython.cmake" \
             --flash-size=4 \
             --optimize-size \
             --ccache \
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-      - name: Comprobar resultado real de compilación
+      - name: Verificar compilación real
         if: always()
         run: |
           echo "========================================"
-          echo "       RESULTADO DE COMPILACIÓN"
+          echo "       RESULTADO DEL BUILD"
           echo "========================================"
 
           echo
-          echo "=== Referencias a wifi_clients ==="
+          echo "=== Project build complete ==="
 
-          grep -n -E \
-            "wifi_clients|usermod_wifi_clients" \
-            build.log \
-            || true
+          if grep -q "Project build complete." build.log; then
+            echo "OK: MicroPython terminó de compilar."
+          else
+            echo "ERROR: MicroPython NO terminó de compilar."
+          fi
 
           echo
-          echo "=== Referencias a errores ==="
+          echo "=== Errores del compilador ==="
 
           grep -n -E \
-            "error:|Error:|FAILED|failed|undefined reference" \
+            "error:|Error:|FAILED|undefined reference|fatal error" \
             build.log \
             | tail -n 100 \
             || true
 
           echo
-          echo "=== BINARIOS ==="
+          echo "=== Referencias a stations_ip ==="
+
+          grep -n \
+            -E "stations_ip|esp_wifi_ap_get_sta_list_with_ip" \
+            build.log \
+            | tail -n 50 \
+            || true
+
+          echo
+          echo "=== BINARIOS GENERADOS ==="
 
           find . \
             -type f \
@@ -243,33 +261,9 @@ jobs:
             | sort
 
           echo
-          echo "=== FIN DEL BUILD.LOG ==="
+          echo "=== FIN DEL LOG ==="
 
-          tail -n 250 build.log
-
-      - name: Verificar firmware generado
-        if: success()
-        run: |
-          echo "========================================"
-          echo "       BUSCANDO FIRMWARE"
-          echo "========================================"
-
-          FIRMWARE="build/lvgl_micropy_ESP32_GENERIC-4.bin"
-
-          if [ ! -s "$FIRMWARE" ]; then
-            echo
-            echo "ERROR:"
-            echo "El builder no generó:"
-            echo "$FIRMWARE"
-            echo
-            echo "Esto significa que MicroPython no llegó a"
-            echo "'Project build complete.'"
-            exit 1
-          fi
-
-          echo
-          echo "Firmware encontrado:"
-          ls -lh "$FIRMWARE"
+          tail -n 120 build.log
 
       - name: Preparar firmware final
         if: success()
@@ -278,18 +272,75 @@ jobs:
 
           mkdir -p final_firmware
 
+          echo "========================================"
+          echo "       COPIANDO MICROPYTHON"
+          echo "========================================"
+
+          if [ ! -s "$BUILD_DIR/micropython.bin" ]; then
+            echo "ERROR: no existe micropython.bin"
+            exit 1
+          fi
+
           cp \
-            build/lvgl_micropy_ESP32_GENERIC-4.bin \
-            final_firmware/firmware.bin
+            "$BUILD_DIR/micropython.bin" \
+            final_firmware/micropython.bin
+
+          echo "OK: micropython.bin"
+          ls -lh final_firmware/micropython.bin
+
+          echo
+          echo "========================================"
+          echo "       COPIANDO BOOTLOADER"
+          echo "========================================"
+
+          if [ ! -s "$BUILD_DIR/bootloader/bootloader.bin" ]; then
+            echo "ERROR: no existe bootloader.bin"
+            exit 1
+          fi
 
           cp \
             "$BUILD_DIR/bootloader/bootloader.bin" \
             final_firmware/bootloader.bin
 
+          echo "OK: bootloader.bin"
+          ls -lh final_firmware/bootloader.bin
+
+          echo
+          echo "========================================"
+          echo "       COPIANDO PARTITION TABLE"
+          echo "========================================"
+
+          if [ ! -s "$BUILD_DIR/partition_table/partition-table.bin" ]; then
+            echo "ERROR: no existe partition-table.bin"
+            exit 1
+          fi
+
           cp \
             "$BUILD_DIR/partition_table/partition-table.bin" \
             final_firmware/partition-table.bin
 
+          echo "OK: partition-table.bin"
+          ls -lh final_firmware/partition-table.bin
+
+          echo
+          echo "========================================"
+          echo "       COPIANDO FIRMWARE COMBINADO"
+          echo "========================================"
+
+          COMBINED="build/lvgl_micropy_ESP32_GENERIC-4.bin"
+
+          if [ -s "$COMBINED" ]; then
+            cp \
+              "$COMBINED" \
+              final_firmware/firmware.bin
+
+            echo "OK: firmware.bin"
+            ls -lh final_firmware/firmware.bin
+          else
+            echo "AVISO: no existe firmware combinado."
+          fi
+
+          echo
           echo "========================================"
           echo "       FIRMWARE FINAL"
           echo "========================================"
@@ -299,13 +350,22 @@ jobs:
       - name: Verificar archivos finales
         if: success()
         run: |
-          test -s final_firmware/firmware.bin
+          echo "========================================"
+          echo "       VERIFICACIÓN FINAL"
+          echo "========================================"
+
+          test -s final_firmware/micropython.bin
           test -s final_firmware/bootloader.bin
           test -s final_firmware/partition-table.bin
 
-          echo "OK: firmware.bin"
+          echo
+          echo "OK: micropython.bin"
           echo "OK: bootloader.bin"
           echo "OK: partition-table.bin"
+
+          if [ -s final_firmware/firmware.bin ]; then
+            echo "OK: firmware.bin"
+          fi
 
       - name: Subir Firmware
         if: success()
