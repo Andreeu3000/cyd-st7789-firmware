@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyelftools pyserial esptool
 
-      - name: Descargar herramientas y dependencias ESP-IDF
+      - name: Descargar herramientas y submódulos ESP-IDF
         shell: bash
         run: |
           python3 make.py esp32 submodules
@@ -39,11 +39,10 @@ jobs:
           import re
           from pathlib import Path
 
-          # Buscar dinámicamente network_wlan.c por si la estructura de carpetas varía
           matches = list(Path(".").rglob("network_wlan.c"))
 
           if not matches:
-              raise SystemExit("ERROR: No se encontró network_wlan.c en ningún directorio del proyecto.")
+              raise SystemExit("ERROR: No se encontró network_wlan.c en ningún directorio.")
 
           path = matches[0]
           print(f"Archivo encontrado en: {path}")
@@ -138,16 +137,21 @@ jobs:
         run: |
           mkdir -p final_firmware
 
-          BIN_FILE=$(find . -type f -name "*.bin" | grep -v "bootloader" | grep -v "partition" | head -n 1)
+          # Evitar Broken Pipe almacenando los archivos en un array de Bash sin usar head/piping prematuro
+          mapfile -t BINS < <(find . -type f -name "*.bin" ! -name "*bootloader*" ! -name "*partition*" ! -name "*ota*")
 
-          if [ -z "$BIN_FILE" ]; then
-            echo "ERROR: No se encontró el binario compilado."
+          if [ ${#BINS[@]} -eq 0 ]; then
+            echo "ERROR: No se encontró ningún archivo .bin de firmware compilado."
             exit 1
           fi
 
+          BIN_FILE="${BINS[0]}"
+
           echo "Firmware encontrado en: $BIN_FILE"
           cp "$BIN_FILE" final_firmware/firmware.bin
-          cp build.log final_firmware/build.log
+          if [ -f "build.log" ]; then
+            cp build.log final_firmware/build.log
+          fi
 
           echo ""
           echo "===== CONTENIDO DE FINAL_FIRMWARE ====="
