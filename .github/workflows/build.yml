@@ -1,81 +1,56 @@
-name: Compilar LVGL MicroPython - CYD ST7789 + IP clientes
+name: Compilar LVGL MicroPython - CYD ST7789
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
+      - name: Descargar lvgl_micropython
+        uses: actions/checkout@v4
+        with:
+          repository: lvgl-micropython/lvgl_micropython
+          submodules: recursive
+          fetch-depth: 1
 
-      - name: Clonar LVGL MicroPython
-        run: |
-          git clone --recursive https://github.com/lvgl-micropython/lvgl_micropython.git .
-
-      - name: Configurar Python
+      - name: Preparar Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Instalar dependencias
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            ninja-build \
-            ccache \
-            libusb-1.0-0-dev
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Parchear network_wlan.c
+      - name: Crear y aplicar parche en network_wlan.c
+        shell: bash
         run: |
           cat > patch.py <<'PY'
+          import re
           from pathlib import Path
 
-          path = Path(
-              "lib/micropython/ports/esp32/network_wlan.c"
-          )
-
+          path = Path("lib/micropython/ports/esp32/network_wlan.c")
           if not path.exists():
-              raise SystemExit(f"No existe: {path}")
+              raise SystemExit(f"ERROR: No existe el archivo {path}")
 
-          text = path.read_text()
+          text = path.read_text(encoding="utf-8")
 
-          include = '#include "esp_wifi_ap_get_sta_list.h"'
-
-          if include not in text:
-              marker = '#include "esp_wifi.h"'
-
-              if marker not in text:
-                  raise SystemExit(
-                      'No se encontró #include "esp_wifi.h"'
-                  )
-
-              text = text.replace(
-                  marker,
-                  marker + "\n" + include,
-                  1
-              )
-
-          marker = (
-              "        case (uintptr_t)MP_OBJ_NEW_QSTR("
-              "MP_QSTR_rssi): {"
+          pattern = re.compile(
+              r'(\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_stations\):.*?)(?=\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_rssi\):)',
+              re.DOTALL
           )
 
-          if marker not in text:
-              raise SystemExit(
-                  "No se encontró MP_QSTR_rssi"
-              )
+          if not pattern.search(text):
+              raise SystemExit("ERROR: No se encontró la sección MP_QSTR_stations para parchear.")
 
-          if "MP_QSTR_stations_ip" not in text:
-
-              code = """
-                  case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations_ip): {
+          replacement = """        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations): {
                       require_if(args[0], ESP_IF_WIFI_AP);
 
                       wifi_sta_list_t station_list = {0};
-                      wifi_sta_mac_ip_list_t ip_list = {0};
+                      wifi_sta_mac_ip_list_t mac_ip_list = {0};
 
                       esp_exceptions(
                           esp_wifi_ap_get_sta_list(&station_list)
@@ -84,78 +59,44 @@ jobs:
                       esp_exceptions(
                           esp_wifi_ap_get_sta_list_with_ip(
                               &station_list,
-                              &ip_list
+                              &mac_ip_list
                           )
                       );
 
                       mp_obj_t list = mp_obj_new_list(0, NULL);
 
-                      for (int i = 0; i < ip_list.num; ++i) {
-                          char ip[16];
+                      for (int i = 0; i < mac_ip_list.num; ++i) {
+                          mp_obj_tuple_t *tuple = mp_obj_new_tuple(2, NULL);
 
-                          snprintf(
-                              ip,
-                              sizeof(ip),
-                              "%u.%u.%u.%u",
-                              ip_list.sta[i].ip.addr & 0xff,
-                              (ip_list.sta[i].ip.addr >> 8) & 0xff,
-                              (ip_list.sta[i].ip.addr >> 16) & 0xff,
-                              (ip_list.sta[i].ip.addr >> 24) & 0xff
-                          );
-
-                          mp_obj_t tuple[2];
-
-                          tuple[0] = mp_obj_new_bytes(
-                              ip_list.sta[i].mac,
+                          tuple->items[0] = mp_obj_new_bytes(
+                              mac_ip_list.sta[i].mac,
                               6
                           );
 
-                          tuple[1] = mp_obj_new_str(
-                              ip,
-                              strlen(ip)
+                          tuple->items[1] = netutils_format_ipv4_addr(
+                              (uint8_t *)&mac_ip_list.sta[i].ip,
+                              NETUTILS_BIG
                           );
 
                           mp_obj_list_append(
                               list,
-                              mp_obj_new_tuple(2, tuple)
+                              MP_OBJ_FROM_PTR(tuple)
                           );
                       }
 
                       return list;
                   }
-              """
+          """
 
-              text = text.replace(
-                  marker,
-                  code + "\n" + marker,
-                  1
-              )
-
-          path.write_text(text)
-
-          final_text = path.read_text()
-
-          if "esp_wifi_ap_get_sta_list_with_ip" not in final_text:
-              raise SystemExit(
-                  "El parche de ESP-IDF no quedó aplicado"
-              )
-
-          if "MP_QSTR_stations_ip" not in final_text:
-              raise SystemExit(
-                  "MP_QSTR_stations_ip no quedó aplicado"
-              )
-
-          print("================================")
-          print("PARCHE APLICADO")
-          print("================================")
-          print("stations_ip: OK")
-          print("ESP-IDF API: OK")
+          new_text = pattern.sub(replacement, text, count=1)
+          path.write_text(new_text, encoding="utf-8")
+          print("Parche aplicado correctamente.")
           PY
 
           python3 patch.py
 
-      - name: Compilar firmware ESP32
-        id: compile
+      - name: Compilar firmware
+        shell: bash
         run: |
           set -o pipefail
 
@@ -169,124 +110,73 @@ jobs:
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-      - name: Localizar firmware generado
-        if: success()
-        run: |
-          echo "========================================"
-          echo "BUSCANDO FIRMWARE"
-          echo "========================================"
+          STATUS=${PIPESTATUS[0]}
 
-          echo
-          echo "Archivos BIN:"
-          find . \
-            -type f \
-            -name "*.bin" \
-            -print \
-            | sort
+          echo ""
+          echo "===== EXIT CODE ====="
+          echo "$STATUS"
 
-          echo
-          echo "========================================"
-          echo "FIRMWARE LVGL"
-          echo "========================================"
+          echo ""
+          echo "===== BINARIOS ====="
+          find . -type f -name "*.bin" -print | sort || true
 
-          FOUND=""
+          echo ""
+          echo "===== PROJECT BUILD COMPLETE ====="
+          grep -n "Project build complete" build.log || true
 
-          for file in \
-            build/lvgl_micropy_ESP32_GENERIC-4.bin \
-            build/lvgl_micropy_ESP32_GENERIC.bin
-          do
-            if [ -f "$file" ]; then
-              FOUND="$file"
-              break
-            fi
-          done
+          echo ""
+          echo "===== MICROPYTHON.BIN ====="
+          find . -type f -name "micropython.bin" -print || true
 
-          if [ -z "$FOUND" ]; then
-            FOUND=$(find build \
-              -maxdepth 1 \
-              -type f \
-              -name "lvgl_micropy_*.bin" \
-              | head -n 1)
+          echo ""
+          echo "===== ERRORES ====="
+          grep -nE "FAILED:|ninja: build stopped|error:|Error:" build.log | tail -100 || true
+
+          if [ "$STATUS" -ne 0 ]; then
+            exit "$STATUS"
           fi
 
-          if [ -z "$FOUND" ]; then
-            echo
-            echo "ERROR: NO SE ENCONTRÓ EL FIRMWARE LVGL"
-            echo
-            echo "Contenido de build/:"
-            find build -maxdepth 2 -type f | sort
+      - name: Verificar firmware
+        shell: bash
+        run: |
+          FIRMWARE="build/lvgl_micropy_ESP32_GENERIC-4.bin"
 
-            echo
-            echo "Últimas líneas de build.log:"
-            tail -n 200 build.log
-
+          if [ ! -f "$FIRMWARE" ]; then
+            echo ""
+            echo "ERROR: No existe:"
+            echo "$FIRMWARE"
+            echo ""
+            echo "===== CONTENIDO DE BUILD ====="
+            find build -maxdepth 3 -type f -print | sort || true
+            echo ""
+            echo "===== FINAL DEL LOG ====="
+            tail -150 build.log || true
             exit 1
           fi
 
-          echo
+          echo ""
           echo "Firmware encontrado:"
-          echo "$FOUND"
+          ls -lh "$FIRMWARE"
+          file "$FIRMWARE"
 
+      - name: Preparar firmware
+        shell: bash
+        run: |
           mkdir -p final_firmware
 
-          cp "$FOUND" final_firmware/firmware.bin
+          cp \
+            build/lvgl_micropy_ESP32_GENERIC-4.bin \
+            final_firmware/firmware.bin
 
-          echo
-          echo "Copiado como:"
-          echo "final_firmware/firmware.bin"
+          cp build.log final_firmware/build.log
 
-      - name: Copiar binarios auxiliares
-        if: success()
-        run: |
-          BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
+          echo ""
+          echo "===== ARCHIVOS FINALES ====="
+          ls -lh final_firmware
 
-          echo "========================================"
-          echo "BINARIOS AUXILIARES"
-          echo "========================================"
-
-          if [ -f "$BUILD_DIR/micropython.bin" ]; then
-            cp "$BUILD_DIR/micropython.bin" \
-              final_firmware/micropython.bin
-
-            echo "micropython.bin: OK"
-          else
-            echo "micropython.bin: no disponible"
-          fi
-
-          if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
-            cp "$BUILD_DIR/bootloader/bootloader.bin" \
-              final_firmware/bootloader.bin
-
-            echo "bootloader.bin: OK"
-          fi
-
-          if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
-            cp "$BUILD_DIR/partition_table/partition-table.bin" \
-              final_firmware/partition-table.bin
-
-            echo "partition-table.bin: OK"
-          fi
-
-          echo
-          echo "========================================"
-          echo "RESULTADO"
-          echo "========================================"
-
-          ls -lh final_firmware/
-
-      - name: Subir Firmware
-        if: success()
+      - name: Subir firmware
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-cyd-st7789
+          name: CYD-LVGL-MicroPython
           path: final_firmware/
-
-      - name: Subir Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            build.log
-            lib/micropython/ports/esp32/build-ESP32_GENERIC/log/
-          if-no-files-found: warn
+          if-no-files-found: error
