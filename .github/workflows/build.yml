@@ -28,91 +28,143 @@ jobs:
             ccache \
             libusb-1.0-0-dev
 
-      - name: Parchear network_wlan.c
+      - name: Parchear MicroPython
         run: |
-          python3 -c "
+          cat > patch.py <<'PY'
           from pathlib import Path
 
-          p = Path('lib/micropython/ports/esp32/network_wlan.c')
-          s = p.read_text()
+          path = Path("lib/micropython/ports/esp32/network_wlan.c")
 
-          include = '#include \\"esp_wifi_ap_get_sta_list.h\\"'
+          if not path.exists():
+              raise SystemExit(f"No existe {path}")
 
-          if include not in s:
-              marker = '#include \\"esp_wifi.h\\"'
-              if marker not in s:
-                  raise SystemExit('No se encontró esp_wifi.h')
-              s = s.replace(marker, marker + '\\n' + include, 1)
+          text = path.read_text()
 
-          marker = '        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_rssi): {'
+          # Include necesario para la API de ESP-IDF
+          include = '#include "esp_wifi_ap_get_sta_list.h"'
 
-          if marker not in s:
-              raise SystemExit('No se encontró el case de rssi')
+          if include not in text:
+              marker = '#include "esp_wifi.h"'
 
-          if 'esp_wifi_ap_get_sta_list_with_ip' not in s:
+              if marker not in text:
+                  raise SystemExit(
+                      'No se encontró #include "esp_wifi.h"'
+                  )
 
-              code = (
-                  '        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations_ip): {\\n'
-                  '            require_if(args[0], ESP_IF_WIFI_AP);\\n'
-                  '\\n'
-                  '            wifi_sta_list_t station_list = {0};\\n'
-                  '            wifi_sta_mac_ip_list_t ip_list = {0};\\n'
-                  '\\n'
-                  '            esp_exceptions(\\n'
-                  '                esp_wifi_ap_get_sta_list(&station_list)\\n'
-                  '            );\\n'
-                  '\\n'
-                  '            esp_exceptions(\\n'
-                  '                esp_wifi_ap_get_sta_list_with_ip(\\n'
-                  '                    &station_list,\\n'
-                  '                    &ip_list\\n'
-                  '                )\\n'
-                  '            );\\n'
-                  '\\n'
-                  '            mp_obj_t list = mp_obj_new_list(0, NULL);\\n'
-                  '\\n'
-                  '            for (int i = 0; i < ip_list.num; ++i) {\\n'
-                  '                char ip[16];\\n'
-                  '\\n'
-                  '                snprintf(\\n'
-                  '                    ip,\\n'
-                  '                    sizeof(ip),\\n'
-                  '                    \\"%u.%u.%u.%u\\",\\n'
-                  '                    ip_list.sta[i].ip.addr & 0xff,\\n'
-                  '                    (ip_list.sta[i].ip.addr >> 8) & 0xff,\\n'
-                  '                    (ip_list.sta[i].ip.addr >> 16) & 0xff,\\n'
-                  '                    (ip_list.sta[i].ip.addr >> 24) & 0xff\\n'
-                  '                );\\n'
-                  '\\n'
-                  '                mp_obj_t tuple[2];\\n'
-                  '\\n'
-                  '                tuple[0] = mp_obj_new_bytes(\\n'
-                  '                    ip_list.sta[i].mac,\\n'
-                  '                    6\\n'
-                  '                );\\n'
-                  '\\n'
-                  '                tuple[1] = mp_obj_new_str(\\n'
-                  '                    ip,\\n'
-                  '                    strlen(ip)\\n'
-                  '                );\\n'
-                  '\\n'
-                  '                mp_obj_list_append(\\n'
-                  '                    list,\\n'
-                  '                    mp_obj_new_tuple(2, tuple)\\n'
-                  '                );\\n'
-                  '            }\\n'
-                  '\\n'
-                  '            return list;\\n'
-                  '        }\\n'
+              text = text.replace(
+                  marker,
+                  marker + "\n" + include,
+                  1
               )
 
-              s = s.replace(marker, code + marker, 1)
+              print("Include añadido.")
+          else:
+              print("Include ya estaba presente.")
 
-          p.write_text(s)
+          # Buscar el case de RSSI para insertar nuestro nuevo case antes.
+          marker = (
+              "        case (uintptr_t)MP_OBJ_NEW_QSTR("
+              "MP_QSTR_rssi): {"
+          )
 
-          print('Parche aplicado correctamente')
-          print('stations_ip:', 'esp_wifi_ap_get_sta_list_with_ip' in s)
-          "
+          if marker not in text:
+              raise SystemExit(
+                  "No se encontró MP_QSTR_rssi en network_wlan.c"
+              )
+
+          # No parchear dos veces.
+          if "MP_QSTR_stations_ip" not in text:
+
+              code = """
+                  case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations_ip): {
+                      require_if(args[0], ESP_IF_WIFI_AP);
+
+                      wifi_sta_list_t station_list = {0};
+                      wifi_sta_mac_ip_list_t ip_list = {0};
+
+                      esp_exceptions(
+                          esp_wifi_ap_get_sta_list(&station_list)
+                      );
+
+                      esp_exceptions(
+                          esp_wifi_ap_get_sta_list_with_ip(
+                              &station_list,
+                              &ip_list
+                          )
+                      );
+
+                      mp_obj_t list = mp_obj_new_list(0, NULL);
+
+                      for (int i = 0; i < ip_list.num; ++i) {
+                          char ip[16];
+
+                          snprintf(
+                              ip,
+                              sizeof(ip),
+                              "%u.%u.%u.%u",
+                              ip_list.sta[i].ip.addr & 0xff,
+                              (ip_list.sta[i].ip.addr >> 8) & 0xff,
+                              (ip_list.sta[i].ip.addr >> 16) & 0xff,
+                              (ip_list.sta[i].ip.addr >> 24) & 0xff
+                          );
+
+                          mp_obj_t tuple[2];
+
+                          tuple[0] = mp_obj_new_bytes(
+                              ip_list.sta[i].mac,
+                              6
+                          );
+
+                          tuple[1] = mp_obj_new_str(
+                              ip,
+                              strlen(ip)
+                          );
+
+                          mp_obj_list_append(
+                              list,
+                              mp_obj_new_tuple(2, tuple)
+                          );
+                      }
+
+                      return list;
+                  }
+          """
+
+              text = text.replace(
+                  marker,
+                  code + "\n" + marker,
+                  1
+              )
+
+              print("stations_ip añadido.")
+          else:
+              print("stations_ip ya estaba presente.")
+
+          path.write_text(text)
+
+          # Comprobaciones
+          final_text = path.read_text()
+
+          if "esp_wifi_ap_get_sta_list_with_ip" not in final_text:
+              raise SystemExit(
+                  "ERROR: no quedó la API stations_with_ip"
+              )
+
+          if "MP_QSTR_stations_ip" not in final_text:
+              raise SystemExit(
+                  "ERROR: no quedó MP_QSTR_stations_ip"
+              )
+
+          print()
+          print("================================")
+          print("PARCHE APLICADO CORRECTAMENTE")
+          print("================================")
+          print("Archivo:", path)
+          print("API IP: OK")
+          print("stations_ip: OK")
+          PY
+
+          python3 patch.py
 
       - name: Compilar firmware ESP32
         id: compile
@@ -152,6 +204,7 @@ jobs:
             cp "$BUILD_DIR/partition_table/partition-table.bin" final_firmware/partition-table.bin
           fi
 
+          echo "Firmware generado:"
           ls -lh final_firmware/
 
       - name: Subir Firmware
