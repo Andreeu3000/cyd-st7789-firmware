@@ -5,47 +5,38 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Descargar repositorio
-        uses: actions/checkout@v4
-        with:
-          repository: lvgl-micropython/lvgl_micropython
-          submodules: recursive
-          fetch-depth: 0
+      - name: Clonar LVGL MicroPython
+        run: |
+          git clone --recursive https://github.com/lvgl-micropython/lvgl_micropython.git .
 
-      - name: Preparar entorno Python
+      - name: Configurar Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
-      - name: Instalar dependencias del sistema y Python
+      - name: Instalar dependencias
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build libusb-1.0-0-dev
-          python -m pip install --upgrade pip
-          pip install pyelftools pyserial esptool
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            ccache \
+            libusb-1.0-0-dev
 
-      - name: Descargar herramientas y submódulos ESP-IDF
-        shell: bash
-        run: |
-          python3 make.py esp32 submodules
-
-      - name: Crear y aplicar parche en network_wlan.c
+      - name: Aplicar parche en network_wlan.c (Obtener IPs en AP)
         shell: bash
         run: |
           cat > patch.py <<'PY'
           import re
           from pathlib import Path
 
-          matches = list(Path(".").rglob("network_wlan.c"))
-
-          if not matches:
-              raise SystemExit("ERROR: No se encontró network_wlan.c en ningún directorio.")
-
-          path = matches[0]
-          print(f"Archivo encontrado en: {path}")
+          path = Path("lib/micropython/ports/esp32/network_wlan.c")
+          if not path.exists():
+              raise SystemExit(f"ERROR: No se encontró el archivo en {path}")
 
           text = path.read_text(encoding="utf-8")
 
@@ -101,13 +92,13 @@ jobs:
 
           new_text = pattern.sub(replacement, text, count=1)
           path.write_text(new_text, encoding="utf-8")
-          print("Parche aplicado correctamente.")
+          print("Parche para IP en AP aplicado correctamente.")
           PY
 
           python3 patch.py
 
-      - name: Compilar firmware MicroPython
-        shell: bash
+      - name: Compilar firmware ESP32
+        id: compile
         run: |
           set -o pipefail
 
@@ -121,45 +112,44 @@ jobs:
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-          STATUS=${PIPESTATUS[0]}
-
-          echo ""
-          echo "===== EXIT CODE ====="
-          echo "$STATUS"
-
-          if [ "$STATUS" -ne 0 ]; then
-            echo "ERROR: La compilación falló."
-            exit "$STATUS"
-          fi
-
-      - name: Preparar firmware para descarga
-        shell: bash
+      - name: Preparar firmware final
+        if: success()
         run: |
+          BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
+
           mkdir -p final_firmware
 
-          # Evitar Broken Pipe almacenando los archivos en un array de Bash sin usar head/piping prematuro
-          mapfile -t BINS < <(find . -type f -name "*.bin" ! -name "*bootloader*" ! -name "*partition*" ! -name "*ota*")
-
-          if [ ${#BINS[@]} -eq 0 ]; then
-            echo "ERROR: No se encontró ningún archivo .bin de firmware compilado."
-            exit 1
+          if [ -f "$BUILD_DIR/firmware.bin" ]; then
+            cp "$BUILD_DIR/firmware.bin" final_firmware/firmware.bin
           fi
 
-          BIN_FILE="${BINS[0]}"
-
-          echo "Firmware encontrado en: $BIN_FILE"
-          cp "$BIN_FILE" final_firmware/firmware.bin
-          if [ -f "build.log" ]; then
-            cp build.log final_firmware/build.log
+          if [ -f "$BUILD_DIR/micropython.bin" ]; then
+            cp "$BUILD_DIR/micropython.bin" final_firmware/micropython.bin
           fi
 
-          echo ""
-          echo "===== CONTENIDO DE FINAL_FIRMWARE ====="
-          ls -lh final_firmware
+          if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
+            cp "$BUILD_DIR/bootloader/bootloader.bin" final_firmware/bootloader.bin
+          fi
 
-      - name: Subir firmware como artefacto
+          if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
+            cp "$BUILD_DIR/partition_table/partition-table.bin" final_firmware/partition-table.bin
+          fi
+
+          ls -lh final_firmware/
+
+      - name: Subir Firmware
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: CYD-LVGL-MicroPython
+          name: firmware-cyd-st7789
           path: final_firmware/
-          if-no-files-found: error
+
+      - name: Subir Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build.log
+            lib/micropython/ports/esp32/build-ESP32_GENERIC/log/
+          if-no-files-found: warn
