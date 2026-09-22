@@ -28,6 +28,198 @@ jobs:
             ccache \
             libusb-1.0-0-dev
 
+      # =========================================================
+      # MODULO C: obtener MAC + IP de clientes del SoftAP
+      # =========================================================
+
+      - name: Crear modulo wifi_clients
+        run: |
+          mkdir -p ext_mod/wifi_clients
+
+          cat > ext_mod/wifi_clients/wifi_clients.c <<'EOF'
+          #include <stdio.h>
+          #include <string.h>
+
+          #include "py/runtime.h"
+          #include "py/obj.h"
+
+          #include "esp_err.h"
+          #include "esp_wifi.h"
+          #include "esp_wifi_ap_get_sta_list.h"
+
+          /*
+           * wifi_clients.get()
+           *
+           * Devuelve:
+           *
+           * [
+           *     ("AA:BB:CC:DD:EE:FF", "192.168.4.2"),
+           *     ("11:22:33:44:55:66", "192.168.4.3")
+           * ]
+           */
+
+          static mp_obj_t wifi_clients_get(void) {
+
+              wifi_sta_list_t sta_list;
+              wifi_sta_mac_ip_list_t sta_ip_list;
+
+              memset(&sta_list, 0, sizeof(sta_list));
+              memset(&sta_ip_list, 0, sizeof(sta_ip_list));
+
+              /*
+               * Obtener estaciones asociadas al SoftAP.
+               */
+              esp_err_t err = esp_wifi_ap_get_sta_list(&sta_list);
+
+              if (err != ESP_OK) {
+                  mp_raise_msg_varg(
+                      &mp_type_OSError,
+                      MP_ERROR_TEXT(
+                          "esp_wifi_ap_get_sta_list failed: %d"
+                      ),
+                      err
+                  );
+              }
+
+              /*
+               * Convertir MAC -> IP usando DHCP/ARP
+               * del AP por defecto.
+               */
+              err = esp_wifi_ap_get_sta_list_with_ip(
+                  &sta_list,
+                  &sta_ip_list
+              );
+
+              if (err != ESP_OK) {
+                  mp_raise_msg_varg(
+                      &mp_type_OSError,
+                      MP_ERROR_TEXT(
+                          "esp_wifi_ap_get_sta_list_with_ip failed: %d"
+                      ),
+                      err
+                  );
+              }
+
+              mp_obj_t result =
+                  mp_obj_new_list(sta_ip_list.num, NULL);
+
+              for (int i = 0; i < sta_ip_list.num; i++) {
+
+                  char mac[18 + 1];
+
+                  snprintf(
+                      mac,
+                      sizeof(mac),
+                      "%02X:%02X:%02X:%02X:%02X:%02X",
+                      sta_ip_list.sta[i].mac[0],
+                      sta_ip_list.sta[i].mac[1],
+                      sta_ip_list.sta[i].mac[2],
+                      sta_ip_list.sta[i].mac[3],
+                      sta_ip_list.sta[i].mac[4],
+                      sta_ip_list.sta[i].mac[5]
+                  );
+
+                  /*
+                   * esp_ip4_addr_t contiene la dirección IPv4
+                   * en formato compatible con ESP-IDF.
+                   */
+                  uint32_t ip = sta_ip_list.sta[i].ip.addr;
+
+                  char ip_str[16];
+
+                  snprintf(
+                      ip_str,
+                      sizeof(ip_str),
+                      "%u.%u.%u.%u",
+                      (unsigned int)((ip >> 0) & 0xFF),
+                      (unsigned int)((ip >> 8) & 0xFF),
+                      (unsigned int)((ip >> 16) & 0xFF),
+                      (unsigned int)((ip >> 24) & 0xFF)
+                  );
+
+                  mp_obj_t pair[2];
+
+                  pair[0] = mp_obj_new_str(
+                      mac,
+                      strlen(mac)
+                  );
+
+                  pair[1] = mp_obj_new_str(
+                      ip_str,
+                      strlen(ip_str)
+                  );
+
+                  mp_obj_list_store(
+                      result,
+                      i,
+                      mp_obj_new_tuple(2, pair)
+                  );
+              }
+
+              return result;
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_0(
+              wifi_clients_get_obj,
+              wifi_clients_get
+          );
+
+          static const mp_rom_map_elem_t
+          wifi_clients_module_globals_table[] = {
+
+              {
+                  MP_ROM_QSTR(MP_QSTR___name__),
+                  MP_ROM_QSTR(MP_QSTR_wifi_clients)
+              },
+
+              {
+                  MP_ROM_QSTR(MP_QSTR_get),
+                  MP_ROM_PTR(&wifi_clients_get_obj)
+              },
+          };
+
+          static MP_DEFINE_CONST_DICT(
+              wifi_clients_module_globals,
+              wifi_clients_module_globals_table
+          );
+
+          const mp_obj_module_t wifi_clients_user_cmodule = {
+              .base = {
+                  &mp_type_module
+              },
+              .globals = (mp_obj_dict_t *)
+                  &wifi_clients_module_globals,
+          };
+
+          MP_REGISTER_MODULE(
+              MP_QSTR_wifi_clients,
+              wifi_clients_user_cmodule
+          );
+          EOF
+
+          cat > ext_mod/wifi_clients/micropython.cmake <<'EOF'
+          add_library(usermod_wifi_clients INTERFACE)
+
+          target_sources(usermod_wifi_clients INTERFACE
+              ${CMAKE_CURRENT_LIST_DIR}/wifi_clients.c
+          )
+
+          target_include_directories(usermod_wifi_clients INTERFACE
+              ${CMAKE_CURRENT_LIST_DIR}
+          )
+
+          target_link_libraries(usermod INTERFACE
+              usermod_wifi_clients
+          )
+          EOF
+
+          echo "Modulo creado:"
+          find ext_mod/wifi_clients -maxdepth 1 -type f -print
+
+      # =========================================================
+      # COMPILAR
+      # =========================================================
+
       - name: Compilar firmware ESP32
         id: compile
         run: |
@@ -37,6 +229,7 @@ jobs:
             BOARD=ESP32_GENERIC \
             DISPLAY=st7789 \
             INDEV=xpt2046 \
+            USER_C_MODULE="$GITHUB_WORKSPACE/ext_mod/wifi_clients/micropython.cmake" \
             --flash-size=4 \
             --optimize-size \
             --ccache \
