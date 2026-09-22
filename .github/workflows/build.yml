@@ -38,18 +38,9 @@ jobs:
           )
 
           if not path.exists():
-              raise SystemExit(
-                  f"No existe: {path}"
-              )
+              raise SystemExit(f"No existe: {path}")
 
           text = path.read_text()
-
-          print("Archivo:")
-          print(path)
-
-          # --------------------------------------------------
-          # Include de la API de ESP-IDF
-          # --------------------------------------------------
 
           include = '#include "esp_wifi_ap_get_sta_list.h"'
 
@@ -67,14 +58,6 @@ jobs:
                   1
               )
 
-              print("Include añadido.")
-          else:
-              print("Include ya existente.")
-
-          # --------------------------------------------------
-          # Buscar el case de RSSI
-          # --------------------------------------------------
-
           marker = (
               "        case (uintptr_t)MP_OBJ_NEW_QSTR("
               "MP_QSTR_rssi): {"
@@ -84,10 +67,6 @@ jobs:
               raise SystemExit(
                   "No se encontró MP_QSTR_rssi"
               )
-
-          # --------------------------------------------------
-          # Añadir stations_ip
-          # --------------------------------------------------
 
           if "MP_QSTR_stations_ip" not in text:
 
@@ -152,33 +131,23 @@ jobs:
                   1
               )
 
-              print("stations_ip añadido.")
-
-          else:
-              print("stations_ip ya estaba presente.")
-
           path.write_text(text)
-
-          # --------------------------------------------------
-          # Verificación
-          # --------------------------------------------------
 
           final_text = path.read_text()
 
           if "esp_wifi_ap_get_sta_list_with_ip" not in final_text:
               raise SystemExit(
-                  "ERROR: no quedó esp_wifi_ap_get_sta_list_with_ip"
+                  "El parche de ESP-IDF no quedó aplicado"
               )
 
           if "MP_QSTR_stations_ip" not in final_text:
               raise SystemExit(
-                  "ERROR: no quedó MP_QSTR_stations_ip"
+                  "MP_QSTR_stations_ip no quedó aplicado"
               )
 
-          print()
-          print("==============================")
-          print("PARCHE CORRECTO")
-          print("==============================")
+          print("================================")
+          print("PARCHE APLICADO")
+          print("================================")
           print("stations_ip: OK")
           print("ESP-IDF API: OK")
           PY
@@ -197,17 +166,18 @@ jobs:
             --flash-size=4 \
             --optimize-size \
             --ccache \
-            --no-scrub \
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-      - name: Verificar resultado de compilación
+      - name: Localizar firmware generado
         if: success()
         run: |
-          echo "=========================================="
-          echo "TODOS LOS BINARIOS"
-          echo "=========================================="
+          echo "========================================"
+          echo "BUSCANDO FIRMWARE"
+          echo "========================================"
 
+          echo
+          echo "Archivos BIN:"
           find . \
             -type f \
             -name "*.bin" \
@@ -215,125 +185,92 @@ jobs:
             | sort
 
           echo
-          echo "=========================================="
-          echo "BUILD DE MICROCONTROLLER"
-          echo "=========================================="
+          echo "========================================"
+          echo "FIRMWARE LVGL"
+          echo "========================================"
 
-          MPY_BUILD="lib/micropython/ports/esp32/build-ESP32_GENERIC"
+          FOUND=""
 
-          if [ -d "$MPY_BUILD" ]; then
-            echo "Directorio encontrado:"
-            echo "$MPY_BUILD"
-            echo
+          for file in \
+            build/lvgl_micropy_ESP32_GENERIC-4.bin \
+            build/lvgl_micropy_ESP32_GENERIC.bin
+          do
+            if [ -f "$file" ]; then
+              FOUND="$file"
+              break
+            fi
+          done
 
-            find "$MPY_BUILD" \
+          if [ -z "$FOUND" ]; then
+            FOUND=$(find build \
+              -maxdepth 1 \
               -type f \
-              \( \
-                -name "micropython.bin" \
-                -o -name "firmware.bin" \
-                -o -name "bootloader.bin" \
-                -o -name "partition-table.bin" \
-              \) \
-              -print
-          else
-            echo "ERROR: no existe $MPY_BUILD"
-            exit 1
+              -name "lvgl_micropy_*.bin" \
+              | head -n 1)
           fi
 
-          echo
-          echo "=========================================="
-          echo "FIRMWARE LVGL"
-          echo "=========================================="
-
-          find build \
-            -maxdepth 1 \
-            -type f \
-            -name "*.bin" \
-            -print \
-            | sort
-
-      - name: Preparar firmware final
-        if: success()
-        run: |
-          mkdir -p final_firmware
-
-          MPY_BUILD="lib/micropython/ports/esp32/build-ESP32_GENERIC"
-
-          # --------------------------------------------------
-          # Firmware combinado oficial de lvgl_micropython
-          # --------------------------------------------------
-
-          COMBINED="build/lvgl_micropy_ESP32_GENERIC-4.bin"
-
-          if [ ! -f "$COMBINED" ]; then
-            echo "ERROR:"
-            echo "No existe:"
-            echo "$COMBINED"
+          if [ -z "$FOUND" ]; then
             echo
-
+            echo "ERROR: NO SE ENCONTRÓ EL FIRMWARE LVGL"
+            echo
             echo "Contenido de build/:"
             find build -maxdepth 2 -type f | sort
 
             echo
-            echo "Últimas líneas del build:"
-            tail -n 100 build.log
+            echo "Últimas líneas de build.log:"
+            tail -n 200 build.log
 
             exit 1
           fi
 
-          cp "$COMBINED" \
-            final_firmware/firmware.bin
+          echo
+          echo "Firmware encontrado:"
+          echo "$FOUND"
 
-          echo "OK: firmware.bin"
+          mkdir -p final_firmware
 
-          # --------------------------------------------------
-          # MicroPython separado
-          # --------------------------------------------------
+          cp "$FOUND" final_firmware/firmware.bin
 
-          if [ -f "$MPY_BUILD/micropython.bin" ]; then
+          echo
+          echo "Copiado como:"
+          echo "final_firmware/firmware.bin"
 
-            cp "$MPY_BUILD/micropython.bin" \
+      - name: Copiar binarios auxiliares
+        if: success()
+        run: |
+          BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
+
+          echo "========================================"
+          echo "BINARIOS AUXILIARES"
+          echo "========================================"
+
+          if [ -f "$BUILD_DIR/micropython.bin" ]; then
+            cp "$BUILD_DIR/micropython.bin" \
               final_firmware/micropython.bin
 
-            echo "OK: micropython.bin"
-
+            echo "micropython.bin: OK"
           else
-
-            echo "AVISO:"
-            echo "No se encontró micropython.bin"
-
+            echo "micropython.bin: no disponible"
           fi
 
-          # --------------------------------------------------
-          # Bootloader
-          # --------------------------------------------------
-
-          if [ -f "$MPY_BUILD/bootloader/bootloader.bin" ]; then
-
-            cp "$MPY_BUILD/bootloader/bootloader.bin" \
+          if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
+            cp "$BUILD_DIR/bootloader/bootloader.bin" \
               final_firmware/bootloader.bin
 
-            echo "OK: bootloader.bin"
-
+            echo "bootloader.bin: OK"
           fi
 
-          # --------------------------------------------------
-          # Partition table
-          # --------------------------------------------------
-
-          if [ -f "$MPY_BUILD/partition_table/partition-table.bin" ]; then
-
-            cp "$MPY_BUILD/partition_table/partition-table.bin" \
+          if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
+            cp "$BUILD_DIR/partition_table/partition-table.bin" \
               final_firmware/partition-table.bin
 
-            echo "OK: partition-table.bin"
-
+            echo "partition-table.bin: OK"
           fi
 
           echo
-          echo "=========================================="
-          echo "FIRMWARE FINAL"
-          echo "=========================================="
+          echo "========================================"
+          echo "RESULTADO"
+          echo "========================================"
 
           ls -lh final_firmware/
 
