@@ -23,7 +23,10 @@ jobs:
       - name: Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install pyelftools pyserial esptool
+          if [ -f "lib/micropython/requirements.txt" ]; then
+            pip install -r lib/micropython/requirements.txt
+          fi
 
       - name: Crear y aplicar parche en network_wlan.c
         shell: bash
@@ -125,10 +128,6 @@ jobs:
           grep -n "Project build complete" build.log || true
 
           echo ""
-          echo "===== MICROPYTHON.BIN ====="
-          find . -type f -name "micropython.bin" -print || true
-
-          echo ""
           echo "===== ERRORES ====="
           grep -nE "FAILED:|ninja: build stopped|error:|Error:" build.log | tail -100 || true
 
@@ -136,38 +135,21 @@ jobs:
             exit "$STATUS"
           fi
 
-      - name: Verificar firmware
-        shell: bash
-        run: |
-          FIRMWARE="build/lvgl_micropy_ESP32_GENERIC-4.bin"
-
-          if [ ! -f "$FIRMWARE" ]; then
-            echo ""
-            echo "ERROR: No existe:"
-            echo "$FIRMWARE"
-            echo ""
-            echo "===== CONTENIDO DE BUILD ====="
-            find build -maxdepth 3 -type f -print | sort || true
-            echo ""
-            echo "===== FINAL DEL LOG ====="
-            tail -150 build.log || true
-            exit 1
-          fi
-
-          echo ""
-          echo "Firmware encontrado:"
-          ls -lh "$FIRMWARE"
-          file "$FIRMWARE"
-
       - name: Preparar firmware
         shell: bash
         run: |
           mkdir -p final_firmware
 
-          cp \
-            build/lvgl_micropy_ESP32_GENERIC-4.bin \
-            final_firmware/firmware.bin
+          # Buscar automáticamente el archivo .bin generado en el directorio de build
+          BIN_FILE=$(find build -type f -name "*.bin" | grep -v "bootloader" | grep -v "partition" | head -n 1)
 
+          if [ -z "$BIN_FILE" ]; then
+            echo "ERROR: No se encontró ningún archivo .bin de firmware compilado."
+            exit 1
+          fi
+
+          echo "Copiando firmware desde: $BIN_FILE"
+          cp "$BIN_FILE" final_firmware/firmware.bin
           cp build.log final_firmware/build.log
 
           echo ""
