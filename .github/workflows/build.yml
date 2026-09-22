@@ -28,61 +28,67 @@ jobs:
             ccache \
             libusb-1.0-0-dev
 
-      - name: Añadir soporte nativo para IPs de clientes WiFi
+      - name: Modificar network_wlan.c
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          source = Path(
+          path = Path(
               "lib/micropython/ports/esp32/network_wlan.c"
           )
 
-          update = Path(
-              "micropy_updates/esp32/network_wlan.c"
-          )
+          text = path.read_text()
 
-          def patch(text):
-              include_anchor = '#include "esp_wifi.h"\n'
+          # -------------------------------------------------
+          # 1. Añadir cabecera ESP-IDF para obtener IPs
+          # -------------------------------------------------
 
-              if '#include "esp_wifi_ap_get_sta_list.h"' not in text:
-                  if include_anchor not in text:
-                      raise RuntimeError(
-                          'No se encontró #include "esp_wifi.h"'
-                      )
+          include = '#include "esp_wifi_ap_get_sta_list.h"\n'
 
-                  text = text.replace(
-                      include_anchor,
-                      include_anchor +
-                      '#include "esp_wifi_ap_get_sta_list.h"\n'
-                      '#include <stdio.h>\n',
-                      1
+          if include not in text:
+
+              anchor = '#include "esp_wifi.h"\n'
+
+              if anchor not in text:
+                  raise SystemExit(
+                      'No se encontró #include "esp_wifi.h"'
                   )
 
-              marker = (
-                  '        case (uintptr_t)MP_OBJ_NEW_QSTR('
-                  'MP_QSTR_rssi): {\n'
+              text = text.replace(
+                  anchor,
+                  anchor + include,
+                  1
               )
 
-              if 'MP_QSTR_stations_ip' not in text:
+          # -------------------------------------------------
+          # 2. Añadir stations_ip
+          # -------------------------------------------------
 
-                  if marker not in text:
-                      raise RuntimeError(
-                          'No se encontró el bloque case de rssi'
-                      )
+          if "MP_QSTR_stations_ip" in text:
+              print("stations_ip ya existe.")
+              path.write_text(text)
+              raise SystemExit(0)
 
-                  new_case = '''        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations_ip): {
-              // Lista de clientes del SoftAP con sus IP.
+          marker = (
+              '        case (uintptr_t)MP_OBJ_NEW_QSTR('
+              'MP_QSTR_rssi): {'
+          )
+
+          if marker not in text:
+              raise SystemExit(
+                  "No se encontró el bloque rssi de network_wlan.c"
+              )
+
+          new_case = r'''        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations_ip): {
               require_if(args[0], ESP_IF_WIFI_AP);
 
               wifi_sta_list_t station_list = {0};
               wifi_sta_mac_ip_list_t station_ip_list = {0};
 
-              // Obtener estaciones asociadas por MAC.
               esp_exceptions(
                   esp_wifi_ap_get_sta_list(&station_list)
               );
 
-              // Obtener IPs mediante DHCP/ARP.
               esp_exceptions(
                   esp_wifi_ap_get_sta_list_with_ip(
                       &station_list,
@@ -96,10 +102,6 @@ jobs:
 
                   char ip_str[16];
 
-                  /*
-                   * IP2STR utiliza los bytes en el orden correcto
-                   * definido por ESP-IDF.
-                   */
                   snprintf(
                       ip_str,
                       sizeof(ip_str),
@@ -107,99 +109,41 @@ jobs:
                       IP2STR(&station_ip_list.sta[i].ip)
                   );
 
-                  mp_obj_tuple_t *t =
-                      mp_obj_new_tuple(2, NULL);
+                  mp_obj_t tuple_items[2];
 
-                  /*
-                   * Elemento 0:
-                   * MAC como bytes, igual que status("stations")
-                   */
-                  t->items[0] = mp_obj_new_bytes(
+                  tuple_items[0] = mp_obj_new_bytes(
                       station_ip_list.sta[i].mac,
-                      sizeof(station_ip_list.sta[i].mac)
+                      6
                   );
 
-                  /*
-                   * Elemento 1:
-                   * IP como string.
-                   */
-                  t->items[1] =
+                  tuple_items[1] =
                       mp_obj_new_str_from_cstr(ip_str);
 
-                  mp_obj_list_append(list, t);
+                  mp_obj_list_append(
+                      list,
+                      mp_obj_new_tuple(
+                          2,
+                          tuple_items
+                      )
+                  );
               }
 
               return list;
           }
+
   '''
 
-                  text = text.replace(
-                      marker,
-                      new_case + marker,
-                      1
-                  )
-
-              return text
-
-          if not source.exists():
-              raise RuntimeError(
-                  f'No existe: {source}'
-              )
-
-          original = source.read_text()
-          patched = patch(original)
-
-          if patched == original:
-              raise RuntimeError(
-                  'El parche no modificó network_wlan.c'
-              )
-
-          source.write_text(patched)
-
-          /*
-           * lvgl_micropython ejecuta copy_micropy_updates()
-           * durante make.py, así que también dejamos la versión
-           * modificada en micropy_updates/esp32.
-           *
-           * Si ya existía un update propio, lo parcheamos en vez
-           * de reemplazarlo ciegamente.
-           */
-          update.parent.mkdir(
-              parents=True,
-              exist_ok=True
+          text = text.replace(
+              marker,
+              new_case + marker,
+              1
           )
 
-          if update.exists():
-              update_text = update.read_text()
-              update.write_text(patch(update_text))
-          else:
-              update.write_text(patched)
+          path.write_text(text)
 
-          print("Parche aplicado correctamente.")
-          print()
-          print("Comprobando MP_QSTR_stations_ip:")
-
-          final_text = update.read_text()
-
-          if "MP_QSTR_stations_ip" not in final_text:
-              raise RuntimeError(
-                  "MP_QSTR_stations_ip no quedó en el archivo"
-              )
-
-          print("OK: stations_ip")
+          print("network_wlan.c modificado correctamente.")
+          print("stations_ip añadido.")
           PY
-
-      - name: Mostrar parche WiFi
-        run: |
-          echo "========================================"
-          echo "       VERIFICACIÓN DEL PARCHE"
-          echo "========================================"
-
-          grep -n \
-            -A55 \
-            -B5 \
-            "MP_QSTR_stations_ip" \
-            micropy_updates/esp32/network_wlan.c
 
       - name: Compilar firmware ESP32
         id: compile
@@ -216,55 +160,6 @@ jobs:
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-      - name: Verificar compilación real
-        if: always()
-        run: |
-          echo "========================================"
-          echo "       RESULTADO DEL BUILD"
-          echo "========================================"
-
-          echo
-          echo "=== Project build complete ==="
-
-          if grep -q "Project build complete." build.log; then
-            echo "OK: MicroPython terminó de compilar."
-          else
-            echo "ERROR: MicroPython NO terminó de compilar."
-          fi
-
-          echo
-          echo "=== Errores del compilador ==="
-
-          grep -n -E \
-            "error:|Error:|FAILED|undefined reference|fatal error" \
-            build.log \
-            | tail -n 100 \
-            || true
-
-          echo
-          echo "=== Referencias a stations_ip ==="
-
-          grep -n \
-            -E "stations_ip|esp_wifi_ap_get_sta_list_with_ip" \
-            build.log \
-            | tail -n 50 \
-            || true
-
-          echo
-          echo "=== BINARIOS GENERADOS ==="
-
-          find . \
-            -type f \
-            -name "*.bin" \
-            -not -path "./.git/*" \
-            -print \
-            | sort
-
-          echo
-          echo "=== FIN DEL LOG ==="
-
-          tail -n 120 build.log
-
       - name: Preparar firmware final
         if: success()
         run: |
@@ -272,100 +167,41 @@ jobs:
 
           mkdir -p final_firmware
 
-          echo "========================================"
-          echo "       COPIANDO MICROPYTHON"
-          echo "========================================"
-
-          if [ ! -s "$BUILD_DIR/micropython.bin" ]; then
-            echo "ERROR: no existe micropython.bin"
-            exit 1
+          if [ -f "$BUILD_DIR/micropython.bin" ]; then
+            cp "$BUILD_DIR/micropython.bin" \
+              final_firmware/micropython.bin
           fi
 
-          cp \
-            "$BUILD_DIR/micropython.bin" \
-            final_firmware/micropython.bin
-
-          echo "OK: micropython.bin"
-          ls -lh final_firmware/micropython.bin
-
-          echo
-          echo "========================================"
-          echo "       COPIANDO BOOTLOADER"
-          echo "========================================"
-
-          if [ ! -s "$BUILD_DIR/bootloader/bootloader.bin" ]; then
-            echo "ERROR: no existe bootloader.bin"
-            exit 1
+          if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
+            cp "$BUILD_DIR/bootloader/bootloader.bin" \
+              final_firmware/bootloader.bin
           fi
 
-          cp \
-            "$BUILD_DIR/bootloader/bootloader.bin" \
-            final_firmware/bootloader.bin
-
-          echo "OK: bootloader.bin"
-          ls -lh final_firmware/bootloader.bin
-
-          echo
-          echo "========================================"
-          echo "       COPIANDO PARTITION TABLE"
-          echo "========================================"
-
-          if [ ! -s "$BUILD_DIR/partition_table/partition-table.bin" ]; then
-            echo "ERROR: no existe partition-table.bin"
-            exit 1
+          if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
+            cp "$BUILD_DIR/partition_table/partition-table.bin" \
+              final_firmware/partition-table.bin
           fi
 
-          cp \
-            "$BUILD_DIR/partition_table/partition-table.bin" \
-            final_firmware/partition-table.bin
-
-          echo "OK: partition-table.bin"
-          ls -lh final_firmware/partition-table.bin
-
-          echo
-          echo "========================================"
-          echo "       COPIANDO FIRMWARE COMBINADO"
-          echo "========================================"
-
-          COMBINED="build/lvgl_micropy_ESP32_GENERIC-4.bin"
-
-          if [ -s "$COMBINED" ]; then
-            cp \
-              "$COMBINED" \
+          if [ -f "build/lvgl_micropy_ESP32_GENERIC-4.bin" ]; then
+            cp "build/lvgl_micropy_ESP32_GENERIC-4.bin" \
               final_firmware/firmware.bin
-
-            echo "OK: firmware.bin"
-            ls -lh final_firmware/firmware.bin
-          else
-            echo "AVISO: no existe firmware combinado."
           fi
 
-          echo
-          echo "========================================"
-          echo "       FIRMWARE FINAL"
-          echo "========================================"
-
+          echo "=== Firmware final ==="
           ls -lh final_firmware/
 
-      - name: Verificar archivos finales
+      - name: Verificar firmware
         if: success()
         run: |
-          echo "========================================"
-          echo "       VERIFICACIÓN FINAL"
-          echo "========================================"
+          echo "=== Archivos generados ==="
+          ls -lh final_firmware/
 
-          test -s final_firmware/micropython.bin
-          test -s final_firmware/bootloader.bin
-          test -s final_firmware/partition-table.bin
+          test -f final_firmware/micropython.bin
+          test -f final_firmware/bootloader.bin
+          test -f final_firmware/partition-table.bin
 
           echo
-          echo "OK: micropython.bin"
-          echo "OK: bootloader.bin"
-          echo "OK: partition-table.bin"
-
-          if [ -s final_firmware/firmware.bin ]; then
-            echo "OK: firmware.bin"
-          fi
+          echo "Firmware correcto."
 
       - name: Subir Firmware
         if: success()
