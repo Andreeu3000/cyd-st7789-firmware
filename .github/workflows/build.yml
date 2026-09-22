@@ -28,22 +28,33 @@ jobs:
             ccache \
             libusb-1.0-0-dev
 
-      - name: Parchear MicroPython
+      - name: Parchear MicroPython para obtener IP de clientes AP
         run: |
           cat > patch.py <<'PY'
           from pathlib import Path
 
-          path = Path("lib/micropython/ports/esp32/network_wlan.c")
+          path = Path(
+              "lib/micropython/ports/esp32/network_wlan.c"
+          )
 
           if not path.exists():
-              raise SystemExit(f"No existe {path}")
+              raise SystemExit(
+                  f"No existe el archivo: {path}"
+              )
 
           text = path.read_text()
 
-          # Include necesario para la API de ESP-IDF
+          print("Archivo encontrado:")
+          print(path)
+
+          # -------------------------------------------------
+          # Include de la API de ESP-IDF
+          # -------------------------------------------------
+
           include = '#include "esp_wifi_ap_get_sta_list.h"'
 
           if include not in text:
+
               marker = '#include "esp_wifi.h"'
 
               if marker not in text:
@@ -58,10 +69,14 @@ jobs:
               )
 
               print("Include añadido.")
-          else:
-              print("Include ya estaba presente.")
 
-          # Buscar el case de RSSI para insertar nuestro nuevo case antes.
+          else:
+              print("Include ya existente.")
+
+          # -------------------------------------------------
+          # Buscar el case de RSSI
+          # -------------------------------------------------
+
           marker = (
               "        case (uintptr_t)MP_OBJ_NEW_QSTR("
               "MP_QSTR_rssi): {"
@@ -69,10 +84,13 @@ jobs:
 
           if marker not in text:
               raise SystemExit(
-                  "No se encontró MP_QSTR_rssi en network_wlan.c"
+                  "No se encontró MP_QSTR_rssi"
               )
 
-          # No parchear dos veces.
+          # -------------------------------------------------
+          # Evitar aplicar el parche dos veces
+          # -------------------------------------------------
+
           if "MP_QSTR_stations_ip" not in text:
 
               code = """
@@ -128,7 +146,7 @@ jobs:
 
                       return list;
                   }
-          """
+              """
 
               text = text.replace(
                   marker,
@@ -137,30 +155,33 @@ jobs:
               )
 
               print("stations_ip añadido.")
+
           else:
               print("stations_ip ya estaba presente.")
 
           path.write_text(text)
 
+          # -------------------------------------------------
           # Comprobaciones
+          # -------------------------------------------------
+
           final_text = path.read_text()
 
           if "esp_wifi_ap_get_sta_list_with_ip" not in final_text:
               raise SystemExit(
-                  "ERROR: no quedó la API stations_with_ip"
+                  "ERROR: la API de IP no quedó en el archivo."
               )
 
           if "MP_QSTR_stations_ip" not in final_text:
               raise SystemExit(
-                  "ERROR: no quedó MP_QSTR_stations_ip"
+                  "ERROR: stations_ip no quedó en el archivo."
               )
 
           print()
-          print("================================")
+          print("==============================")
           print("PARCHE APLICADO CORRECTAMENTE")
-          print("================================")
-          print("Archivo:", path)
-          print("API IP: OK")
+          print("==============================")
+          print("API stations + IP: OK")
           print("stations_ip: OK")
           PY
 
@@ -178,6 +199,7 @@ jobs:
             --flash-size=4 \
             --optimize-size \
             --ccache \
+            --no-scrub \
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
@@ -188,23 +210,76 @@ jobs:
 
           mkdir -p final_firmware
 
-          if [ -f "$BUILD_DIR/firmware.bin" ]; then
-            cp "$BUILD_DIR/firmware.bin" final_firmware/firmware.bin
-          fi
+          echo "========================================"
+          echo "BINARIOS GENERADOS"
+          echo "========================================"
+
+          find "$BUILD_DIR" \
+            -type f \
+            -name "*.bin" \
+            -print
+
+          echo
+          echo "========================================"
+          echo "COPIANDO BINARIOS"
+          echo "========================================"
 
           if [ -f "$BUILD_DIR/micropython.bin" ]; then
-            cp "$BUILD_DIR/micropython.bin" final_firmware/micropython.bin
+            cp "$BUILD_DIR/micropython.bin" \
+              final_firmware/micropython.bin
+
+            echo "OK: micropython.bin"
+          else
+            echo "ERROR: micropython.bin no existe"
+            exit 1
           fi
 
           if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
-            cp "$BUILD_DIR/bootloader/bootloader.bin" final_firmware/bootloader.bin
+            cp "$BUILD_DIR/bootloader/bootloader.bin" \
+              final_firmware/bootloader.bin
+
+            echo "OK: bootloader.bin"
+          else
+            echo "ERROR: bootloader.bin no existe"
+            exit 1
           fi
 
           if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
-            cp "$BUILD_DIR/partition_table/partition-table.bin" final_firmware/partition-table.bin
+            cp "$BUILD_DIR/partition_table/partition-table.bin" \
+              final_firmware/partition-table.bin
+
+            echo "OK: partition-table.bin"
+          else
+            echo "ERROR: partition-table.bin no existe"
+            exit 1
           fi
 
-          echo "Firmware generado:"
+          echo
+          echo "========================================"
+          echo "BUSCANDO FIRMWARE COMBINADO"
+          echo "========================================"
+
+          COMBINED=$(find build \
+            -maxdepth 1 \
+            -type f \
+            -name "lvgl_micropy_*.bin" \
+            | head -n 1)
+
+          if [ -n "$COMBINED" ]; then
+            cp "$COMBINED" final_firmware/firmware.bin
+
+            echo "OK: firmware.bin"
+            echo "Origen: $COMBINED"
+          else
+            echo "ERROR: no se encontró firmware combinado"
+            exit 1
+          fi
+
+          echo
+          echo "========================================"
+          echo "FIRMWARE FINAL"
+          echo "========================================"
+
           ls -lh final_firmware/
 
       - name: Subir Firmware
