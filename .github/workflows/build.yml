@@ -31,7 +31,6 @@ jobs:
         shell: bash
         run: |
           cat > patch.py <<'PY'
-          import re
           from pathlib import Path
 
           path = Path("lib/micropython/ports/esp32/network_wlan.c")
@@ -40,59 +39,57 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          pattern = re.compile(
-              r'(\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_stations\):.*?)(?=\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_rssi\):)',
-              re.DOTALL
-          )
+          target_str = "case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations):"
+          
+          if target_str not in text:
+              raise SystemExit("ERROR: No se encontró el punto de inserción MP_QSTR_stations.")
 
-          if not pattern.search(text):
-              raise SystemExit("ERROR: No se encontró la sección MP_QSTR_stations para parchear.")
-
-          replacement = """        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations): {
+          patch_code = """        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations): {
                       require_if(args[0], ESP_IF_WIFI_AP);
 
+                      typedef struct {
+                          uint8_t mac[6];
+                          uint32_t ip;
+                      } custom_wifi_sta_ip_t;
+
+                      typedef struct {
+                          custom_wifi_sta_ip_t sta[15];
+                          int num;
+                      } custom_wifi_sta_mac_ip_list_t;
+
+                      extern esp_err_t esp_wifi_ap_get_sta_list_with_ip(const wifi_sta_list_t *sta_list, custom_wifi_sta_mac_ip_list_t *mac_ip_list);
+
                       wifi_sta_list_t station_list = {0};
-                      wifi_sta_mac_ip_list_t mac_ip_list = {0};
+                      custom_wifi_sta_mac_ip_list_t mac_ip_list = {0};
 
-                      esp_exceptions(
-                          esp_wifi_ap_get_sta_list(&station_list)
-                      );
-
-                      esp_exceptions(
-                          esp_wifi_ap_get_sta_list_with_ip(
-                              &station_list,
-                              &mac_ip_list
-                          )
-                      );
+                      esp_exceptions(esp_wifi_ap_get_sta_list(&station_list));
+                      esp_exceptions(esp_wifi_ap_get_sta_list_with_ip(&station_list, &mac_ip_list));
 
                       mp_obj_t list = mp_obj_new_list(0, NULL);
 
                       for (int i = 0; i < mac_ip_list.num; ++i) {
                           mp_obj_tuple_t *tuple = mp_obj_new_tuple(2, NULL);
-
-                          tuple->items[0] = mp_obj_new_bytes(
-                              mac_ip_list.sta[i].mac,
-                              6
-                          );
-
-                          tuple->items[1] = netutils_format_ipv4_addr(
-                              (uint8_t *)&mac_ip_list.sta[i].ip,
-                              NETUTILS_BIG
-                          );
-
-                          mp_obj_list_append(
-                              list,
-                              MP_OBJ_FROM_PTR(tuple)
-                          );
+                          tuple->items[0] = mp_obj_new_bytes(mac_ip_list.sta[i].mac, 6);
+                          tuple->items[1] = netutils_format_ipv4_addr((uint8_t *)&mac_ip_list.sta[i].ip, NETUTILS_BIG);
+                          mp_obj_list_append(list, MP_OBJ_FROM_PTR(tuple));
                       }
 
                       return list;
-                  }
-          """
+                  }"""
 
-          new_text = pattern.sub(replacement, text, count=1)
+          # Reemplazar la rama completa de MP_QSTR_stations
+          import re
+          pattern = re.compile(
+              r'case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_stations\):.*?(?=\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_rssi\):)',
+              re.DOTALL
+          )
+
+          new_text, count = pattern.subn(patch_code + "\n", text)
+          if count == 0:
+              raise SystemExit("ERROR: No se pudo reemplazar la sección MP_QSTR_stations.")
+
           path.write_text(new_text, encoding="utf-8")
-          print("Parche para IP en AP aplicado correctamente.")
+          print("Parche C aplicado exitosamente en network_wlan.c.")
           PY
 
           python3 patch.py
@@ -119,7 +116,7 @@ jobs:
 
           mkdir -p final_firmware
 
-          # Copiar bootloader y partition-table si existen
+          # Copiar bootloader y partition table
           if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
             cp "$BUILD_DIR/bootloader/bootloader.bin" final_firmware/bootloader.bin
           fi
@@ -128,7 +125,7 @@ jobs:
             cp "$BUILD_DIR/partition_table/partition-table.bin" final_firmware/partition-table.bin
           fi
 
-          # Buscar el binario principal generado (firmware.bin o micropython.bin)
+          # Copiar binario principal y crear copia como micropython.bin
           if [ -f "$BUILD_DIR/firmware.bin" ]; then
             cp "$BUILD_DIR/firmware.bin" final_firmware/firmware.bin
             cp "$BUILD_DIR/firmware.bin" final_firmware/micropython.bin
@@ -137,7 +134,7 @@ jobs:
             cp "$BUILD_DIR/micropython.bin" final_firmware/firmware.bin
           fi
 
-          echo "Archivos generados en final_firmware:"
+          echo "Archivos en final_firmware:"
           ls -lh final_firmware/
 
       - name: Subir Firmware
