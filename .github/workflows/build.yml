@@ -112,21 +112,14 @@ jobs:
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-      - name: Preparar firmware final
+      - name: Preparar y verificar binarios finales
         if: success()
         run: |
           BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
 
           mkdir -p final_firmware
 
-          if [ -f "$BUILD_DIR/firmware.bin" ]; then
-            cp "$BUILD_DIR/firmware.bin" final_firmware/firmware.bin
-          fi
-
-          if [ -f "$BUILD_DIR/micropython.bin" ]; then
-            cp "$BUILD_DIR/micropython.bin" final_firmware/micropython.bin
-          fi
-
+          # Copiar bootloader y partition-table si existen
           if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
             cp "$BUILD_DIR/bootloader/bootloader.bin" final_firmware/bootloader.bin
           fi
@@ -135,6 +128,16 @@ jobs:
             cp "$BUILD_DIR/partition_table/partition-table.bin" final_firmware/partition-table.bin
           fi
 
+          # Buscar el binario principal generado (firmware.bin o micropython.bin)
+          if [ -f "$BUILD_DIR/firmware.bin" ]; then
+            cp "$BUILD_DIR/firmware.bin" final_firmware/firmware.bin
+            cp "$BUILD_DIR/firmware.bin" final_firmware/micropython.bin
+          elif [ -f "$BUILD_DIR/micropython.bin" ]; then
+            cp "$BUILD_DIR/micropython.bin" final_firmware/micropython.bin
+            cp "$BUILD_DIR/micropython.bin" final_firmware/firmware.bin
+          fi
+
+          echo "Archivos generados en final_firmware:"
           ls -lh final_firmware/
 
       - name: Subir Firmware
