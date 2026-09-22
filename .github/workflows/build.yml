@@ -8,27 +8,26 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Descargar lvgl_micropython
+      - name: Descargar repositorio
         uses: actions/checkout@v4
         with:
           repository: lvgl-micropython/lvgl_micropython
-          submodules: recursive
+          submodules: false
           fetch-depth: 1
 
-      - name: Preparar Python
+      - name: Preparar entorno Python y herramientas
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Instalar dependencias
+      - name: Instalar dependencias del sistema y Python
         run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build libusb-1.0-0-dev
           python -m pip install --upgrade pip
           pip install pyelftools pyserial esptool
-          if [ -f "lib/micropython/requirements.txt" ]; then
-            pip install -r lib/micropython/requirements.txt
-          fi
 
-      - name: Crear y aplicar parche en network_wlan.c
+      - name: Aplicar parche en network_wlan.c
         shell: bash
         run: |
           cat > patch.py <<'PY'
@@ -98,7 +97,12 @@ jobs:
 
           python3 patch.py
 
-      - name: Compilar firmware
+      - name: Descargar submódulos y toolchain de ESP-IDF
+        shell: bash
+        run: |
+          python3 make.py esp32 submodules
+
+      - name: Compilar firmware MicroPython
         shell: bash
         run: |
           set -o pipefail
@@ -120,43 +124,37 @@ jobs:
           echo "$STATUS"
 
           echo ""
-          echo "===== BINARIOS ====="
+          echo "===== BINARIOS ENCONTRADOS ====="
           find . -type f -name "*.bin" -print | sort || true
 
-          echo ""
-          echo "===== PROJECT BUILD COMPLETE ====="
-          grep -n "Project build complete" build.log || true
-
-          echo ""
-          echo "===== ERRORES ====="
-          grep -nE "FAILED:|ninja: build stopped|error:|Error:" build.log | tail -100 || true
-
           if [ "$STATUS" -ne 0 ]; then
+            echo "ERROR: La compilación falló."
             exit "$STATUS"
           fi
 
-      - name: Preparar firmware
+      - name: Preparar firmware para descarga
         shell: bash
         run: |
           mkdir -p final_firmware
 
-          # Buscar automáticamente el archivo .bin generado en el directorio de build
-          BIN_FILE=$(find build -type f -name "*.bin" | grep -v "bootloader" | grep -v "partition" | head -n 1)
+          # Buscar el archivo .bin de firmware generado en todo el repositorio
+          BIN_FILE=$(find . -type f -name "*.bin" | grep -v "bootloader" | grep -v "partition" | head -n 1)
 
           if [ -z "$BIN_FILE" ]; then
-            echo "ERROR: No se encontró ningún archivo .bin de firmware compilado."
+            echo "ERROR: No se encontró el binario compilado."
+            find . -type f -name "*.bin" || true
             exit 1
           fi
 
-          echo "Copiando firmware desde: $BIN_FILE"
+          echo "Firmware encontrado en: $BIN_FILE"
           cp "$BIN_FILE" final_firmware/firmware.bin
           cp build.log final_firmware/build.log
 
           echo ""
-          echo "===== ARCHIVOS FINALES ====="
+          echo "===== CONTENIDO DE FINAL_FIRMWARE ====="
           ls -lh final_firmware
 
-      - name: Subir firmware
+      - name: Subir firmware como artefacto
         uses: actions/upload-artifact@v4
         with:
           name: CYD-LVGL-MicroPython
