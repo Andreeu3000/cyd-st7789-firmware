@@ -28,7 +28,7 @@ jobs:
             ccache \
             libusb-1.0-0-dev
 
-      - name: Crear módulo C para obtener IPs de clientes WiFi
+      - name: Crear módulo C WiFi Clients
         run: |
           mkdir -p ext_mod/wifi_clients
 
@@ -36,6 +36,7 @@ jobs:
           #include "py/runtime.h"
           #include "py/obj.h"
 
+          #include "esp_err.h"
           #include "esp_wifi.h"
           #include "esp_wifi_ap_get_sta_list.h"
 
@@ -45,20 +46,32 @@ jobs:
           #include <string.h>
 
 
-          static mp_obj_t wifi_clients_get(void) {
-
+          static mp_obj_t wifi_clients_get(void)
+          {
               wifi_sta_list_t sta_list;
               wifi_sta_mac_ip_list_t sta_ip_list;
 
               memset(&sta_list, 0, sizeof(sta_list));
               memset(&sta_ip_list, 0, sizeof(sta_ip_list));
 
-              esp_err_t err = esp_wifi_ap_get_sta_list(&sta_list);
+              esp_err_t err;
+
+              /*
+               * Obtener estaciones asociadas al SoftAP.
+               */
+              err = esp_wifi_ap_get_sta_list(&sta_list);
 
               if (err != ESP_OK) {
                   return mp_obj_new_list(0, NULL);
               }
 
+              /*
+               * Obtener las IP correspondientes a esas MAC.
+               *
+               * ESP-IDF obtiene primero la información del DHCP
+               * y puede consultar ARP si todavía no existe una
+               * concesión DHCP disponible.
+               */
               err = esp_wifi_ap_get_sta_list_with_ip(
                   &sta_list,
                   &sta_ip_list
@@ -75,6 +88,10 @@ jobs:
                   char mac_str[18];
                   char ip_str[16];
 
+                  /*
+                   * MAC:
+                   * AA:BB:CC:DD:EE:FF
+                   */
                   snprintf(
                       mac_str,
                       sizeof(mac_str),
@@ -87,32 +104,40 @@ jobs:
                       sta_ip_list.sta[i].mac[5]
                   );
 
+                  /*
+                   * IP:
+                   * 192.168.4.2
+                   *
+                   * Usamos la función de lwIP para evitar problemas
+                   * de endianess.
+                   */
                   ip4addr_ntoa_r(
                       &sta_ip_list.sta[i].ip,
                       ip_str,
                       sizeof(ip_str)
                   );
 
-                  mp_obj_t tuple[2];
+                  mp_obj_t tuple_items[2];
 
-                  tuple[0] = mp_obj_new_str(
+                  tuple_items[0] = mp_obj_new_str(
                       mac_str,
                       strlen(mac_str)
                   );
 
-                  tuple[1] = mp_obj_new_str(
+                  tuple_items[1] = mp_obj_new_str(
                       ip_str,
                       strlen(ip_str)
                   );
 
                   mp_obj_list_append(
                       result,
-                      mp_obj_new_tuple(2, tuple)
+                      mp_obj_new_tuple(2, tuple_items)
                   );
               }
 
               return result;
           }
+
 
           static MP_DEFINE_CONST_FUN_OBJ_0(
               wifi_clients_get_obj,
@@ -122,11 +147,15 @@ jobs:
 
           static const mp_rom_map_elem_t wifi_clients_globals_table[] = {
 
-              { MP_ROM_QSTR(MP_QSTR___name__),
-                MP_ROM_QSTR(MP_QSTR_wifi_clients) },
+              {
+                  MP_ROM_QSTR(MP_QSTR___name__),
+                  MP_ROM_QSTR(MP_QSTR_wifi_clients)
+              },
 
-              { MP_ROM_QSTR(MP_QSTR_get),
-                MP_ROM_PTR(&wifi_clients_get_obj) },
+              {
+                  MP_ROM_QSTR(MP_QSTR_get),
+                  MP_ROM_PTR(&wifi_clients_get_obj)
+              },
 
           };
 
@@ -165,6 +194,36 @@ jobs:
           )
           EOF
 
+      - name: Conservar micropython.bin del builder
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("builder/esp32.py")
+
+          data = path.read_text()
+
+          old = "            scrub_build_folder()\n"
+
+          if old not in data:
+              raise SystemExit(
+                  "No se encontró scrub_build_folder() en builder/esp32.py"
+              )
+
+          new = (
+              "            # Mantener los artefactos individuales "
+              "para el workflow.\n"
+              "            # El builder normalmente limpia micropython.bin "
+              "antes de terminar.\n"
+          )
+
+          data = data.replace(old, new, 1)
+
+          path.write_text(data)
+
+          print("scrub_build_folder() desactivado correctamente.")
+          PY
+
       - name: Compilar firmware ESP32
         id: compile
         run: |
@@ -188,52 +247,126 @@ jobs:
 
           mkdir -p final_firmware
 
-          echo "=== Archivos generados ==="
+          echo "======================================"
+          echo "       BINARIOS DEL BUILD"
+          echo "======================================"
 
           find "$BUILD_DIR" \
-            -maxdepth 3 \
             -type f \
-            \( \
-              -name "*.bin" \
-              -o -name "*.elf" \
-            \) \
-            -print
+            -name "*.bin" \
+            -print \
+            | sort
 
           echo
-          echo "=== Copiando firmware ==="
-
-          if [ -f "$BUILD_DIR/firmware.bin" ]; then
-            cp "$BUILD_DIR/firmware.bin" final_firmware/firmware.bin
-          fi
+          echo "======================================"
+          echo "       BUSCANDO MICROPYTHON"
+          echo "======================================"
 
           if [ -f "$BUILD_DIR/micropython.bin" ]; then
-            cp "$BUILD_DIR/micropython.bin" final_firmware/micropython.bin
-          fi
 
-          if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
-            cp "$BUILD_DIR/bootloader/bootloader.bin" final_firmware/bootloader.bin
-          fi
+            echo "Encontrado:"
+            echo "$BUILD_DIR/micropython.bin"
 
-          if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
-            cp "$BUILD_DIR/partition_table/partition-table.bin" final_firmware/partition-table.bin
+            cp \
+              "$BUILD_DIR/micropython.bin" \
+              final_firmware/micropython.bin
+
+          else
+
+            echo "ERROR: micropython.bin no existe."
+
+            echo
+            echo "Contenido del directorio:"
+            find "$BUILD_DIR" \
+              -maxdepth 3 \
+              -type f \
+              -print \
+              | sort
+
+            exit 1
           fi
 
           echo
-          echo "=== Firmware final ==="
+          echo "======================================"
+          echo "       BOOTLOADER"
+          echo "======================================"
+
+          if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
+            cp \
+              "$BUILD_DIR/bootloader/bootloader.bin" \
+              final_firmware/bootloader.bin
+          else
+            echo "ERROR: bootloader.bin no existe."
+            exit 1
+          fi
+
+          echo
+          echo "======================================"
+          echo "       PARTITION TABLE"
+          echo "======================================"
+
+          if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
+            cp \
+              "$BUILD_DIR/partition_table/partition-table.bin" \
+              final_firmware/partition-table.bin
+          else
+            echo "ERROR: partition-table.bin no existe."
+            exit 1
+          fi
+
+          echo
+          echo "======================================"
+          echo "       FIRMWARE COMBINADO"
+          echo "======================================"
+
+          COMBINED="build/lvgl_micropy_ESP32_GENERIC-4.bin"
+
+          if [ -f "$COMBINED" ]; then
+
+            cp \
+              "$COMBINED" \
+              final_firmware/firmware.bin
+
+            echo "Encontrado firmware combinado:"
+            echo "$COMBINED"
+
+          else
+
+            echo "AVISO: no se encontró firmware combinado."
+
+          fi
+
+          echo
+          echo "======================================"
+          echo "       FIRMWARE FINAL"
+          echo "======================================"
+
           ls -lh final_firmware/
 
       - name: Verificar firmware
         if: success()
         run: |
-          echo "=== Verificación ==="
+          echo "======================================"
+          echo "       VERIFICACIÓN"
+          echo "======================================"
 
-          test -f final_firmware/micropython.bin
-          test -f final_firmware/bootloader.bin
-          test -f final_firmware/partition-table.bin
+          test -s final_firmware/micropython.bin
+          test -s final_firmware/bootloader.bin
+          test -s final_firmware/partition-table.bin
 
+          echo
           echo "OK: micropython.bin"
           echo "OK: bootloader.bin"
           echo "OK: partition-table.bin"
+
+          if [ -f final_firmware/firmware.bin ]; then
+            test -s final_firmware/firmware.bin
+            echo "OK: firmware.bin"
+          fi
+
+          echo
+          echo "Tamaños:"
+          ls -lh final_firmware/
 
       - name: Subir Firmware
         if: success()
