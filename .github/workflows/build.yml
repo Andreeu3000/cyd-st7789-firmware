@@ -31,6 +31,7 @@ jobs:
         shell: bash
         run: |
           cat > patch.py <<'PY'
+          import re
           from pathlib import Path
 
           path = Path("lib/micropython/ports/esp32/network_wlan.c")
@@ -39,10 +40,9 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          target_str = "case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations):"
-          
-          if target_str not in text:
-              raise SystemExit("ERROR: No se encontró el punto de inserción MP_QSTR_stations.")
+          # 1. Incluir la cabecera netutils.h al inicio del archivo si no está presente
+          if '#include "shared/netutils/netutils.h"' not in text:
+              text = '#include "shared/netutils/netutils.h"\n' + text
 
           patch_code = """        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations): {
                       require_if(args[0], ESP_IF_WIFI_AP);
@@ -77,8 +77,7 @@ jobs:
                       return list;
                   }"""
 
-          # Reemplazar la rama completa de MP_QSTR_stations
-          import re
+          # 2. Reemplazar el bloque MP_QSTR_stations
           pattern = re.compile(
               r'case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_stations\):.*?(?=\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_rssi\):)',
               re.DOTALL
@@ -89,7 +88,7 @@ jobs:
               raise SystemExit("ERROR: No se pudo reemplazar la sección MP_QSTR_stations.")
 
           path.write_text(new_text, encoding="utf-8")
-          print("Parche C aplicado exitosamente en network_wlan.c.")
+          print("Parche C e inclusión de netutils.h aplicados exitosamente.")
           PY
 
           python3 patch.py
@@ -116,7 +115,6 @@ jobs:
 
           mkdir -p final_firmware
 
-          # Copiar bootloader y partition table
           if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
             cp "$BUILD_DIR/bootloader/bootloader.bin" final_firmware/bootloader.bin
           fi
@@ -125,7 +123,6 @@ jobs:
             cp "$BUILD_DIR/partition_table/partition-table.bin" final_firmware/partition-table.bin
           fi
 
-          # Copiar binario principal y crear copia como micropython.bin
           if [ -f "$BUILD_DIR/firmware.bin" ]; then
             cp "$BUILD_DIR/firmware.bin" final_firmware/firmware.bin
             cp "$BUILD_DIR/firmware.bin" final_firmware/micropython.bin
