@@ -57,7 +57,7 @@ jobs:
               esp_err_t err;
 
               /*
-               * Obtener estaciones asociadas al SoftAP.
+               * Obtener las estaciones conectadas al SoftAP.
                */
               err = esp_wifi_ap_get_sta_list(&sta_list);
 
@@ -66,11 +66,7 @@ jobs:
               }
 
               /*
-               * Obtener las IP correspondientes a esas MAC.
-               *
-               * ESP-IDF obtiene primero la información del DHCP
-               * y puede consultar ARP si todavía no existe una
-               * concesión DHCP disponible.
+               * Obtener las IP asociadas a las estaciones.
                */
               err = esp_wifi_ap_get_sta_list_with_ip(
                   &sta_list,
@@ -89,7 +85,7 @@ jobs:
                   char ip_str[16];
 
                   /*
-                   * MAC:
+                   * Formato:
                    * AA:BB:CC:DD:EE:FF
                    */
                   snprintf(
@@ -105,11 +101,8 @@ jobs:
                   );
 
                   /*
-                   * IP:
-                   * 192.168.4.2
-                   *
-                   * Usamos la función de lwIP para evitar problemas
-                   * de endianess.
+                   * Convertir IPv4 usando lwIP para evitar
+                   * problemas de endianess.
                    */
                   ip4addr_ntoa_r(
                       &sta_ip_list.sta[i].ip,
@@ -194,36 +187,6 @@ jobs:
           )
           EOF
 
-      - name: Conservar micropython.bin del builder
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("builder/esp32.py")
-
-          data = path.read_text()
-
-          old = "            scrub_build_folder()\n"
-
-          if old not in data:
-              raise SystemExit(
-                  "No se encontró scrub_build_folder() en builder/esp32.py"
-              )
-
-          new = (
-              "            # Mantener los artefactos individuales "
-              "para el workflow.\n"
-              "            # El builder normalmente limpia micropython.bin "
-              "antes de terminar.\n"
-          )
-
-          data = data.replace(old, new, 1)
-
-          path.write_text(data)
-
-          print("scrub_build_folder() desactivado correctamente.")
-          PY
-
       - name: Compilar firmware ESP32
         id: compile
         run: |
@@ -243,130 +206,107 @@ jobs:
       - name: Preparar firmware final
         if: success()
         run: |
-          BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
-
           mkdir -p final_firmware
 
-          echo "======================================"
-          echo "       BINARIOS DEL BUILD"
-          echo "======================================"
+          echo "========================================"
+          echo "      BUSCANDO FIRMWARE GENERADO"
+          echo "========================================"
 
-          find "$BUILD_DIR" \
+          echo
+          echo "Archivos .bin dentro de build/:"
+
+          find build \
             -type f \
             -name "*.bin" \
             -print \
             | sort
 
           echo
-          echo "======================================"
-          echo "       BUSCANDO MICROPYTHON"
-          echo "======================================"
+          echo "Archivos .bin dentro del build de MicroPython:"
 
-          if [ -f "$BUILD_DIR/micropython.bin" ]; then
+          find lib/micropython/ports/esp32/build-ESP32_GENERIC \
+            -type f \
+            -name "*.bin" \
+            -print \
+            | sort
 
-            echo "Encontrado:"
-            echo "$BUILD_DIR/micropython.bin"
+          echo
+          echo "========================================"
+          echo "      COPIANDO FIRMWARE COMBINADO"
+          echo "========================================"
 
-            cp \
-              "$BUILD_DIR/micropython.bin" \
-              final_firmware/micropython.bin
+          FIRMWARE="build/lvgl_micropy_ESP32_GENERIC-4.bin"
 
-          else
-
-            echo "ERROR: micropython.bin no existe."
-
+          if [ ! -f "$FIRMWARE" ]; then
+            echo "ERROR: No se encontró:"
+            echo "$FIRMWARE"
             echo
-            echo "Contenido del directorio:"
-            find "$BUILD_DIR" \
-              -maxdepth 3 \
-              -type f \
-              -print \
-              | sort
-
+            echo "Contenido de build/:"
+            find build -maxdepth 2 -type f -print | sort
             exit 1
           fi
 
-          echo
-          echo "======================================"
-          echo "       BOOTLOADER"
-          echo "======================================"
+          cp "$FIRMWARE" final_firmware/firmware.bin
 
-          if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
-            cp \
-              "$BUILD_DIR/bootloader/bootloader.bin" \
-              final_firmware/bootloader.bin
-          else
-            echo "ERROR: bootloader.bin no existe."
+          echo "OK: firmware.bin"
+          ls -lh final_firmware/firmware.bin
+
+          echo
+          echo "========================================"
+          echo "      COPIANDO BOOTLOADER"
+          echo "========================================"
+
+          BOOTLOADER="lib/micropython/ports/esp32/build-ESP32_GENERIC/bootloader/bootloader.bin"
+
+          if [ ! -f "$BOOTLOADER" ]; then
+            echo "ERROR: No se encontró bootloader.bin"
             exit 1
           fi
 
-          echo
-          echo "======================================"
-          echo "       PARTITION TABLE"
-          echo "======================================"
+          cp "$BOOTLOADER" final_firmware/bootloader.bin
 
-          if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
-            cp \
-              "$BUILD_DIR/partition_table/partition-table.bin" \
-              final_firmware/partition-table.bin
-          else
-            echo "ERROR: partition-table.bin no existe."
+          echo "OK: bootloader.bin"
+
+          echo
+          echo "========================================"
+          echo "      COPIANDO PARTITION TABLE"
+          echo "========================================"
+
+          PARTITION="lib/micropython/ports/esp32/build-ESP32_GENERIC/partition_table/partition-table.bin"
+
+          if [ ! -f "$PARTITION" ]; then
+            echo "ERROR: No se encontró partition-table.bin"
             exit 1
           fi
 
-          echo
-          echo "======================================"
-          echo "       FIRMWARE COMBINADO"
-          echo "======================================"
+          cp "$PARTITION" final_firmware/partition-table.bin
 
-          COMBINED="build/lvgl_micropy_ESP32_GENERIC-4.bin"
-
-          if [ -f "$COMBINED" ]; then
-
-            cp \
-              "$COMBINED" \
-              final_firmware/firmware.bin
-
-            echo "Encontrado firmware combinado:"
-            echo "$COMBINED"
-
-          else
-
-            echo "AVISO: no se encontró firmware combinado."
-
-          fi
+          echo "OK: partition-table.bin"
 
           echo
-          echo "======================================"
-          echo "       FIRMWARE FINAL"
-          echo "======================================"
+          echo "========================================"
+          echo "      FIRMWARE FINAL"
+          echo "========================================"
 
           ls -lh final_firmware/
 
       - name: Verificar firmware
         if: success()
         run: |
-          echo "======================================"
-          echo "       VERIFICACIÓN"
-          echo "======================================"
+          echo "========================================"
+          echo "      VERIFICACIÓN FINAL"
+          echo "========================================"
 
-          test -s final_firmware/micropython.bin
+          test -s final_firmware/firmware.bin
           test -s final_firmware/bootloader.bin
           test -s final_firmware/partition-table.bin
 
-          echo
-          echo "OK: micropython.bin"
+          echo "OK: firmware.bin"
           echo "OK: bootloader.bin"
           echo "OK: partition-table.bin"
 
-          if [ -f final_firmware/firmware.bin ]; then
-            test -s final_firmware/firmware.bin
-            echo "OK: firmware.bin"
-          fi
-
           echo
-          echo "Tamaños:"
-          ls -lh final_firmware/
+          echo "Todos los archivos necesarios están presentes."
 
       - name: Subir Firmware
         if: success()
