@@ -49,15 +49,15 @@ jobs:
           static mp_obj_t wifi_clients_get(void)
           {
               wifi_sta_list_t sta_list;
-              wifi_sta_mac_ip_list_t sta_ip_list;
+              wifi_sta_mac_ip_list_t ip_list;
 
               memset(&sta_list, 0, sizeof(sta_list));
-              memset(&sta_ip_list, 0, sizeof(sta_ip_list));
+              memset(&ip_list, 0, sizeof(ip_list));
 
               esp_err_t err;
 
               /*
-               * Obtener las estaciones conectadas al SoftAP.
+               * Obtener estaciones asociadas al SoftAP.
                */
               err = esp_wifi_ap_get_sta_list(&sta_list);
 
@@ -66,11 +66,14 @@ jobs:
               }
 
               /*
-               * Obtener las IP asociadas a las estaciones.
+               * Obtener IP de cada estación.
+               *
+               * Esta API utiliza la información del DHCP del
+               * SoftAP y también puede consultar ARP.
                */
               err = esp_wifi_ap_get_sta_list_with_ip(
                   &sta_list,
-                  &sta_ip_list
+                  &ip_list
               );
 
               if (err != ESP_OK) {
@@ -79,52 +82,44 @@ jobs:
 
               mp_obj_t result = mp_obj_new_list(0, NULL);
 
-              for (int i = 0; i < sta_ip_list.num; i++) {
+              for (int i = 0; i < ip_list.num; i++) {
 
-                  char mac_str[18];
-                  char ip_str[16];
+                  char mac[18];
+                  char ip[16];
 
-                  /*
-                   * Formato:
-                   * AA:BB:CC:DD:EE:FF
-                   */
                   snprintf(
-                      mac_str,
-                      sizeof(mac_str),
+                      mac,
+                      sizeof(mac),
                       "%02X:%02X:%02X:%02X:%02X:%02X",
-                      sta_ip_list.sta[i].mac[0],
-                      sta_ip_list.sta[i].mac[1],
-                      sta_ip_list.sta[i].mac[2],
-                      sta_ip_list.sta[i].mac[3],
-                      sta_ip_list.sta[i].mac[4],
-                      sta_ip_list.sta[i].mac[5]
+                      ip_list.sta[i].mac[0],
+                      ip_list.sta[i].mac[1],
+                      ip_list.sta[i].mac[2],
+                      ip_list.sta[i].mac[3],
+                      ip_list.sta[i].mac[4],
+                      ip_list.sta[i].mac[5]
                   );
 
-                  /*
-                   * Convertir IPv4 usando lwIP para evitar
-                   * problemas de endianess.
-                   */
                   ip4addr_ntoa_r(
-                      &sta_ip_list.sta[i].ip,
-                      ip_str,
-                      sizeof(ip_str)
+                      &ip_list.sta[i].ip,
+                      ip,
+                      sizeof(ip)
                   );
 
-                  mp_obj_t tuple_items[2];
+                  mp_obj_t items[2];
 
-                  tuple_items[0] = mp_obj_new_str(
-                      mac_str,
-                      strlen(mac_str)
+                  items[0] = mp_obj_new_str(
+                      mac,
+                      strlen(mac)
                   );
 
-                  tuple_items[1] = mp_obj_new_str(
-                      ip_str,
-                      strlen(ip_str)
+                  items[1] = mp_obj_new_str(
+                      ip,
+                      strlen(ip)
                   );
 
                   mp_obj_list_append(
                       result,
-                      mp_obj_new_tuple(2, tuple_items)
+                      mp_obj_new_tuple(2, items)
                   );
               }
 
@@ -171,6 +166,7 @@ jobs:
           );
           EOF
 
+
           cat > ext_mod/wifi_clients/micropython.cmake <<'EOF'
           add_library(usermod_wifi_clients INTERFACE)
 
@@ -178,14 +174,23 @@ jobs:
               ${CMAKE_CURRENT_LIST_DIR}/wifi_clients.c
           )
 
-          target_include_directories(usermod_wifi_clients INTERFACE
-              ${CMAKE_CURRENT_LIST_DIR}
-          )
-
           target_link_libraries(usermod INTERFACE
               usermod_wifi_clients
           )
           EOF
+
+      - name: Verificar módulo C
+        run: |
+          echo "=== MÓDULO C ==="
+          ls -lh ext_mod/wifi_clients/
+
+          echo
+          echo "=== CMAKE ==="
+          cat ext_mod/wifi_clients/micropython.cmake
+
+          echo
+          echo "=== C ==="
+          sed -n '1,240p' ext_mod/wifi_clients/wifi_clients.c
 
       - name: Compilar firmware ESP32
         id: compile
@@ -203,100 +208,97 @@ jobs:
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-      - name: Preparar firmware final
+      - name: Comprobar resultado real de compilación
+        if: always()
+        run: |
+          echo "========================================"
+          echo "       RESULTADO DE COMPILACIÓN"
+          echo "========================================"
+
+          echo
+          echo "=== Referencias a wifi_clients ==="
+
+          grep -n -E \
+            "wifi_clients|usermod_wifi_clients" \
+            build.log \
+            || true
+
+          echo
+          echo "=== Referencias a errores ==="
+
+          grep -n -E \
+            "error:|Error:|FAILED|failed|undefined reference" \
+            build.log \
+            | tail -n 100 \
+            || true
+
+          echo
+          echo "=== BINARIOS ==="
+
+          find . \
+            -type f \
+            -name "*.bin" \
+            -not -path "./.git/*" \
+            -print \
+            | sort
+
+          echo
+          echo "=== FIN DEL BUILD.LOG ==="
+
+          tail -n 250 build.log
+
+      - name: Verificar firmware generado
         if: success()
         run: |
-          mkdir -p final_firmware
-
           echo "========================================"
-          echo "      BUSCANDO FIRMWARE GENERADO"
-          echo "========================================"
-
-          echo
-          echo "Archivos .bin dentro de build/:"
-
-          find build \
-            -type f \
-            -name "*.bin" \
-            -print \
-            | sort
-
-          echo
-          echo "Archivos .bin dentro del build de MicroPython:"
-
-          find lib/micropython/ports/esp32/build-ESP32_GENERIC \
-            -type f \
-            -name "*.bin" \
-            -print \
-            | sort
-
-          echo
-          echo "========================================"
-          echo "      COPIANDO FIRMWARE COMBINADO"
+          echo "       BUSCANDO FIRMWARE"
           echo "========================================"
 
           FIRMWARE="build/lvgl_micropy_ESP32_GENERIC-4.bin"
 
-          if [ ! -f "$FIRMWARE" ]; then
-            echo "ERROR: No se encontró:"
+          if [ ! -s "$FIRMWARE" ]; then
+            echo
+            echo "ERROR:"
+            echo "El builder no generó:"
             echo "$FIRMWARE"
             echo
-            echo "Contenido de build/:"
-            find build -maxdepth 2 -type f -print | sort
+            echo "Esto significa que MicroPython no llegó a"
+            echo "'Project build complete.'"
             exit 1
           fi
 
-          cp "$FIRMWARE" final_firmware/firmware.bin
-
-          echo "OK: firmware.bin"
-          ls -lh final_firmware/firmware.bin
-
           echo
+          echo "Firmware encontrado:"
+          ls -lh "$FIRMWARE"
+
+      - name: Preparar firmware final
+        if: success()
+        run: |
+          BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
+
+          mkdir -p final_firmware
+
+          cp \
+            build/lvgl_micropy_ESP32_GENERIC-4.bin \
+            final_firmware/firmware.bin
+
+          cp \
+            "$BUILD_DIR/bootloader/bootloader.bin" \
+            final_firmware/bootloader.bin
+
+          cp \
+            "$BUILD_DIR/partition_table/partition-table.bin" \
+            final_firmware/partition-table.bin
+
           echo "========================================"
-          echo "      COPIANDO BOOTLOADER"
-          echo "========================================"
-
-          BOOTLOADER="lib/micropython/ports/esp32/build-ESP32_GENERIC/bootloader/bootloader.bin"
-
-          if [ ! -f "$BOOTLOADER" ]; then
-            echo "ERROR: No se encontró bootloader.bin"
-            exit 1
-          fi
-
-          cp "$BOOTLOADER" final_firmware/bootloader.bin
-
-          echo "OK: bootloader.bin"
-
-          echo
-          echo "========================================"
-          echo "      COPIANDO PARTITION TABLE"
-          echo "========================================"
-
-          PARTITION="lib/micropython/ports/esp32/build-ESP32_GENERIC/partition_table/partition-table.bin"
-
-          if [ ! -f "$PARTITION" ]; then
-            echo "ERROR: No se encontró partition-table.bin"
-            exit 1
-          fi
-
-          cp "$PARTITION" final_firmware/partition-table.bin
-
-          echo "OK: partition-table.bin"
-
-          echo
-          echo "========================================"
-          echo "      FIRMWARE FINAL"
+          echo "       FIRMWARE FINAL"
           echo "========================================"
 
           ls -lh final_firmware/
 
-      - name: Verificar firmware
+      - name: Verificar archivos finales
         if: success()
         run: |
-          echo "========================================"
-          echo "      VERIFICACIÓN FINAL"
-          echo "========================================"
-
           test -s final_firmware/firmware.bin
           test -s final_firmware/bootloader.bin
           test -s final_firmware/partition-table.bin
@@ -304,9 +306,6 @@ jobs:
           echo "OK: firmware.bin"
           echo "OK: bootloader.bin"
           echo "OK: partition-table.bin"
-
-          echo
-          echo "Todos los archivos necesarios están presentes."
 
       - name: Subir Firmware
         if: success()
