@@ -26,10 +26,20 @@ jobs:
             ninja-build \
             ccache \
             libusb-1.0-0-dev
+          pip install esptool
 
-      - name: Aplicar parche en network_wlan.c (Obtener IPs en AP)
+      - name: Aplicar parche en network_wlan.c y Tabla de Particiones Ampliada
         shell: bash
         run: |
+          # 1. Crear tabla de particiones personalizada de 4MB con 3.2MB para la App (Factory)
+          cat > lib/micropython/ports/esp32/partitions-4mb-custom.csv <<'EOF'
+          # Name,   Type, SubType, Offset,  Size, Flags
+          nvs,      data, nvs,     0x9000,  0x6000,
+          phy_init, data, phy,     0xf000,  0x1000,
+          factory,  app,  factory, 0x10000, 0x330000,
+          EOF
+
+          # 2. Aplicar parche C en network_wlan.c
           cat > patch.py <<'PY'
           import re
           from pathlib import Path
@@ -40,7 +50,6 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          # 1. Incluir la cabecera netutils.h al inicio del archivo si no está presente
           if '#include "shared/netutils/netutils.h"' not in text:
               text = '#include "shared/netutils/netutils.h"\n' + text
 
@@ -77,7 +86,6 @@ jobs:
                       return list;
                   }"""
 
-          # 2. Reemplazar el bloque MP_QSTR_stations
           pattern = re.compile(
               r'case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_stations\):.*?(?=\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_rssi\):)',
               re.DOTALL
@@ -88,7 +96,7 @@ jobs:
               raise SystemExit("ERROR: No se pudo reemplazar la sección MP_QSTR_stations.")
 
           path.write_text(new_text, encoding="utf-8")
-          print("Parche C e inclusión de netutils.h aplicados exitosamente.")
+          print("Parche C aplicado exitosamente.")
           PY
 
           python3 patch.py
@@ -100,6 +108,8 @@ jobs:
 
           python3 make.py esp32 \
             BOARD=ESP32_GENERIC \
+            BOARD_VARIANT= \
+            PART_CSV=partitions-4mb-custom.csv \
             DISPLAY=st7789 \
             INDEV=xpt2046 \
             --flash-size=4 \
@@ -108,30 +118,37 @@ jobs:
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-      - name: Preparar y verificar binarios finales
+      - name: Crear imagen binaria unificada (0x0) y empaquetar
         if: success()
         run: |
           BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
 
           mkdir -p final_firmware
 
-          if [ -f "$BUILD_DIR/bootloader/bootloader.bin" ]; then
-            cp "$BUILD_DIR/bootloader/bootloader.bin" final_firmware/bootloader.bin
+          BOOTLOADER="$BUILD_DIR/bootloader/bootloader.bin"
+          PARTITION="$BUILD_DIR/partition_table/partition-table.bin"
+          APP="$BUILD_DIR/micropython.bin"
+
+          if [ ! -f "$APP" ]; then
+            APP="$BUILD_DIR/firmware.bin"
           fi
 
-          if [ -f "$BUILD_DIR/partition_table/partition-table.bin" ]; then
-            cp "$BUILD_DIR/partition_table/partition-table.bin" final_firmware/partition-table.bin
-          fi
+          # Copiar archivos individuales
+          cp "$BOOTLOADER" final_firmware/bootloader.bin
+          cp "$PARTITION" final_firmware/partition-table.bin
+          cp "$APP" final_firmware/app_micropython.bin
 
-          if [ -f "$BUILD_DIR/firmware.bin" ]; then
-            cp "$BUILD_DIR/firmware.bin" final_firmware/firmware.bin
-            cp "$BUILD_DIR/firmware.bin" final_firmware/micropython.bin
-          elif [ -f "$BUILD_DIR/micropython.bin" ]; then
-            cp "$BUILD_DIR/micropython.bin" final_firmware/micropython.bin
-            cp "$BUILD_DIR/micropython.bin" final_firmware/firmware.bin
-          fi
+          # Unificar los 3 archivos en un único binario completo listo para grabar en 0x0
+          python3 -m esptool --chip esp32 merge_bin \
+            -o final_firmware/firmware_merged_0x0.bin \
+            --flash_mode dio \
+            --flash_freq 40m \
+            --flash_size 4MB \
+            0x1000 "$BOOTLOADER" \
+            0x8000 "$PARTITION" \
+            0x10000 "$APP"
 
-          echo "Archivos en final_firmware:"
+          echo "Archivos listos en final_firmware:"
           ls -lh final_firmware/
 
       - name: Subir Firmware
@@ -146,7 +163,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: |
-            build.log
-            lib/micropython/ports/esp32/build-ESP32_GENERIC/log/
-          if-no-files-found: warn
+          path: build.log
