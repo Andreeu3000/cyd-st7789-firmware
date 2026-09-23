@@ -28,78 +28,105 @@ jobs:
             libusb-1.0-0-dev
           pip install esptool
 
-      - name: Aplicar parche en network_wlan.c y Tabla de Particiones Ampliada
-        shell: bash
+      - name: Crear script de parche (Sin comillas triples)
         run: |
-          # 1. Crear tabla de particiones personalizada de 4MB con 3.2MB para la App (Factory)
-          cat > lib/micropython/ports/esp32/partitions-4mb-custom.csv <<'EOF'
+          cat << 'EOF' > patch_network.py
+          from pathlib import Path
+          import re
+
+          wlan_files = list(Path('.').rglob('network_wlan.c'))
+          if not wlan_files:
+              raise FileNotFoundError('No se encontró network_wlan.c en el repositorio.')
+
+          path = wlan_files[0]
+          text = path.read_text(encoding='utf-8')
+
+          inc_netutils = '#include "shared/netutils/netutils.h"\n'
+          inc_esp = '#include "esp_wifi_ap_get_sta_list.h"\n'
+
+          if inc_netutils not in text:
+              text = inc_netutils + text
+
+          if inc_esp not in text:
+              text = inc_esp + text
+
+          # Construcción del bloque de código mediante arreglo de cadenas (cero conflicto de triple comilla)
+          patch_lines = [
+              "        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations): {",
+              "            // Return list of connected stations.",
+              "            require_if(args[0], ESP_IF_WIFI_AP);",
+              "",
+              "            wifi_sta_list_t station_list;",
+              "            esp_exceptions(",
+              "                esp_wifi_ap_get_sta_list(&station_list)",
+              "            );",
+              "",
+              "            wifi_sta_mac_ip_list_t mac_ip_list;",
+              "            esp_exceptions(",
+              "                esp_wifi_ap_get_sta_list_with_ip(",
+              "                    &station_list,",
+              "                    &mac_ip_list",
+              "                )",
+              "            );",
+              "",
+              "            mp_obj_t list = mp_obj_new_list(0, NULL);",
+              "",
+              "            int count = mac_ip_list.num;",
+              "",
+              "            esp_netif_pair_mac_ip_t *source =",
+              "                (esp_netif_pair_mac_ip_t *)mac_ip_list.sta;",
+              "",
+              "            for (int i = 0; i < count; ++i) {",
+              "                mp_obj_tuple_t *t =",
+              "                    mp_obj_new_tuple(2, NULL);",
+              "",
+              "                t->items[0] = mp_obj_new_bytes(",
+              "                    source[i].mac,",
+              "                    sizeof(source[i].mac)",
+              "                );",
+              "",
+              "                t->items[1] =",
+              "                    source[i].ip.addr != 0",
+              "                    ? netutils_format_ipv4_addr(",
+              "                        (uint8_t *)(&source[i].ip),",
+              "                        NETUTILS_BIG",
+              "                    )",
+              "                    : mp_const_none;",
+              "",
+              "                mp_obj_list_append(",
+              "                    list,",
+              "                    MP_OBJ_FROM_PTR(t)",
+              "                );",
+              "            }",
+              "",
+              "            return list;",
+              "        }"
+          ]
+
+          patch_code = '\n'.join(patch_lines)
+
+          target_str = 'case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations):'
+          if target_str in text:
+              pattern = re.compile(r'case \(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_stations\):.*?(?=case |default:|\})', re.DOTALL)
+              text = pattern.sub(patch_code + '\n', text)
+          else:
+              print('Advertencia: No se encontró la etiqueta MP_QSTR_stations explícita.')
+
+          path.write_text(text, encoding='utf-8')
+          print(f'Parche aplicado exitosamente en: {path}')
+          EOF
+
+      - name: Aplicar Parche y Crear Particiones Ampliadas
+        run: |
+          python3 patch_network.py
+
+          # Crear la tabla de particiones personalizada para soportar la imagen de LVGL
+          cat > lib/micropython/ports/esp32/partitions-4mb-custom.csv << 'EOF'
           # Name,   Type, SubType, Offset,  Size, Flags
           nvs,      data, nvs,     0x9000,  0x6000,
           phy_init, data, phy,     0xf000,  0x1000,
           factory,  app,  factory, 0x10000, 0x330000,
           EOF
-
-          # 2. Aplicar parche C en network_wlan.c
-          cat > patch.py <<'PY'
-          import re
-          from pathlib import Path
-
-          path = Path("lib/micropython/ports/esp32/network_wlan.c")
-          if not path.exists():
-              raise SystemExit(f"ERROR: No se encontró el archivo en {path}")
-
-          text = path.read_text(encoding="utf-8")
-
-          if '#include "shared/netutils/netutils.h"' not in text:
-              text = '#include "shared/netutils/netutils.h"\n' + text
-
-          patch_code = """        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations): {
-                      require_if(args[0], ESP_IF_WIFI_AP);
-
-                      typedef struct {
-                          uint8_t mac[6];
-                          uint32_t ip;
-                      } custom_wifi_sta_ip_t;
-
-                      typedef struct {
-                          custom_wifi_sta_ip_t sta[15];
-                          int num;
-                      } custom_wifi_sta_mac_ip_list_t;
-
-                      extern esp_err_t esp_wifi_ap_get_sta_list_with_ip(const wifi_sta_list_t *sta_list, custom_wifi_sta_mac_ip_list_t *mac_ip_list);
-
-                      wifi_sta_list_t station_list = {0};
-                      custom_wifi_sta_mac_ip_list_t mac_ip_list = {0};
-
-                      esp_exceptions(esp_wifi_ap_get_sta_list(&station_list));
-                      esp_exceptions(esp_wifi_ap_get_sta_list_with_ip(&station_list, &mac_ip_list));
-
-                      mp_obj_t list = mp_obj_new_list(0, NULL);
-
-                      for (int i = 0; i < mac_ip_list.num; ++i) {
-                          mp_obj_tuple_t *tuple = mp_obj_new_tuple(2, NULL);
-                          tuple->items[0] = mp_obj_new_bytes(mac_ip_list.sta[i].mac, 6);
-                          tuple->items[1] = netutils_format_ipv4_addr((uint8_t *)&mac_ip_list.sta[i].ip, NETUTILS_BIG);
-                          mp_obj_list_append(list, MP_OBJ_FROM_PTR(tuple));
-                      }
-
-                      return list;
-                  }"""
-
-          pattern = re.compile(
-              r'case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_stations\):.*?(?=\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_rssi\):)',
-              re.DOTALL
-          )
-
-          new_text, count = pattern.subn(patch_code + "\n", text)
-          if count == 0:
-              raise SystemExit("ERROR: No se pudo reemplazar la sección MP_QSTR_stations.")
-
-          path.write_text(new_text, encoding="utf-8")
-          print("Parche C aplicado exitosamente.")
-          PY
-
-          python3 patch.py
 
       - name: Compilar firmware ESP32
         id: compile
@@ -133,12 +160,10 @@ jobs:
             APP="$BUILD_DIR/firmware.bin"
           fi
 
-          # Copiar archivos individuales
           cp "$BOOTLOADER" final_firmware/bootloader.bin
           cp "$PARTITION" final_firmware/partition-table.bin
           cp "$APP" final_firmware/app_micropython.bin
 
-          # Unificar los 3 archivos en un único binario completo listo para grabar en 0x0
           python3 -m esptool --chip esp32 merge_bin \
             -o final_firmware/firmware_merged_0x0.bin \
             --flash_mode dio \
@@ -148,7 +173,7 @@ jobs:
             0x8000 "$PARTITION" \
             0x10000 "$APP"
 
-          echo "Archivos listos en final_firmware:"
+          echo "Archivos generados en final_firmware:"
           ls -lh final_firmware/
 
       - name: Subir Firmware
