@@ -8,29 +8,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # ============================================================
-      # CLONAR LVGL MICROPYTHON
-      # ============================================================
-
       - name: Clonar LVGL MicroPython
         run: |
           git clone --recursive https://github.com/lvgl-micropython/lvgl_micropython.git .
-
-
-      # ============================================================
-      # PYTHON
-      # ============================================================
 
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-
-      # ============================================================
-      # DEPENDENCIAS
-      # ============================================================
 
       - name: Instalar dependencias
         run: |
@@ -41,22 +26,12 @@ jobs:
             ninja-build \
             ccache \
             libusb-1.0-0-dev
-
           pip install esptool
-
-
-      # ============================================================
-      # WIFI + PARTICIONES
-      # ============================================================
 
       - name: Aplicar parche en network_wlan.c y Tabla de Particiones Ampliada
         shell: bash
         run: |
-
-          # ==========================================================
-          # 1. Crear tabla de particiones personalizada de 4MB
-          # ==========================================================
-
+          # 1. Crear tabla de particiones personalizada de 4MB con 3.2MB para la App (Factory)
           cat > lib/micropython/ports/esp32/partitions-4mb-custom.csv <<'EOF'
           # Name,   Type, SubType, Offset,  Size, Flags
           nvs,      data, nvs,     0x9000,  0x6000,
@@ -64,62 +39,30 @@ jobs:
           factory,  app,  factory, 0x10000, 0x330000,
           EOF
 
-
-          # ==========================================================
           # 2. Aplicar parche C en network_wlan.c
-          # ==========================================================
-
           cat > patch.py <<'PY'
-
           import re
           from pathlib import Path
 
-
-          path = Path(
-              "lib/micropython/ports/esp32/network_wlan.c"
-          )
-
+          path = Path("lib/micropython/ports/esp32/network_wlan.c")
 
           if not path.exists():
-              raise SystemExit(
-                  f"ERROR: No se encontró el archivo en {path}"
-              )
+              raise SystemExit(f"ERROR: No se encontró el archivo en {path}")
 
-
-          text = path.read_text(
-              encoding="utf-8"
-          )
-
+          text = path.read_text(encoding="utf-8")
 
           # ============================================================
           # HEADERS
           # ============================================================
 
-          if (
-              '#include "shared/netutils/netutils.h"'
-              not in text
-          ):
-              text = (
-                  '#include "shared/netutils/netutils.h"\n'
-                  + text
-              )
+          if '#include "shared/netutils/netutils.h"' not in text:
+              text = '#include "shared/netutils/netutils.h"\n' + text
 
-
-          if (
-              '#include "esp_wifi_ap_get_sta_list.h"'
-              not in text
-          ):
-              text = (
-                  '#include "esp_wifi_ap_get_sta_list.h"\n'
-                  + text
-              )
-
+          if '#include "esp_wifi_ap_get_sta_list.h"' not in text:
+              text = '#include "esp_wifi_ap_get_sta_list.h"\n' + text
 
           if '#include "esp_netif.h"' not in text:
-              text = (
-                  '#include "esp_netif.h"\n'
-                  + text
-              )
+              text = '#include "esp_netif.h"\n' + text
 
 
           # ============================================================
@@ -178,24 +121,20 @@ jobs:
                       return list;
                   }"""
 
-
           pattern = re.compile(
               r'case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_stations\):.*?(?=\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_rssi\):)',
               re.DOTALL
           )
-
 
           new_text, count = pattern.subn(
               patch_code + "\n",
               text
           )
 
-
           if count == 0:
               raise SystemExit(
                   "ERROR: No se pudo reemplazar la sección MP_QSTR_stations."
               )
-
 
           text = new_text
 
@@ -212,20 +151,18 @@ jobs:
           // ============================================================
 
 
-          static esp_netif_t *network_wlan_get_ap_netif(void) {
+          // ------------------------------------------------------------
+          // Helpers
+          // ------------------------------------------------------------
 
+          static esp_netif_t *network_wlan_get_ap_netif(void) {
               esp_netif_t *netif =
-                  esp_netif_get_handle_from_ifkey(
-                      "WIFI_AP_DEF"
-                  );
+                  esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
 
               if (netif == NULL) {
-
                   mp_raise_msg(
                       &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "AP netif not available"
-                      )
+                      MP_ERROR_TEXT("AP netif not available")
                   );
               }
 
@@ -237,7 +174,6 @@ jobs:
               mp_obj_t mac_in,
               mp_buffer_info_t *bufinfo
           ) {
-
               mp_get_buffer_raise(
                   mac_in,
                   bufinfo,
@@ -245,11 +181,8 @@ jobs:
               );
 
               if (bufinfo->len != 6) {
-
                   mp_raise_ValueError(
-                      MP_ERROR_TEXT(
-                          "MAC must be 6 bytes"
-                      )
+                      MP_ERROR_TEXT("MAC must be 6 bytes")
                   );
               }
           }
@@ -262,11 +195,7 @@ jobs:
           static mp_obj_t network_wlan_dhcp_status(
               mp_obj_t self_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               esp_netif_t *netif =
                   network_wlan_get_ap_netif();
@@ -285,7 +214,6 @@ jobs:
               );
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_1(
               network_wlan_dhcp_status_obj,
               network_wlan_dhcp_status
@@ -299,11 +227,7 @@ jobs:
           static mp_obj_t network_wlan_dhcp_restart(
               mp_obj_t self_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               esp_netif_t *netif =
                   network_wlan_get_ap_netif();
@@ -317,27 +241,18 @@ jobs:
                   )
               );
 
-              if (
-                  status ==
-                  ESP_NETIF_DHCP_STARTED
-              ) {
-
+              if (status == ESP_NETIF_DHCP_STARTED) {
                   esp_exceptions(
-                      esp_netif_dhcps_stop(
-                          netif
-                      )
+                      esp_netif_dhcps_stop(netif)
                   );
               }
 
               esp_exceptions(
-                  esp_netif_dhcps_start(
-                      netif
-                  )
+                  esp_netif_dhcps_start(netif)
               );
 
               return mp_const_none;
           }
-
 
           static MP_DEFINE_CONST_FUN_OBJ_1(
               network_wlan_dhcp_restart_obj,
@@ -352,24 +267,17 @@ jobs:
           static mp_obj_t network_wlan_dhcp_start(
               mp_obj_t self_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               esp_netif_t *netif =
                   network_wlan_get_ap_netif();
 
               esp_exceptions(
-                  esp_netif_dhcps_start(
-                      netif
-                  )
+                  esp_netif_dhcps_start(netif)
               );
 
               return mp_const_none;
           }
-
 
           static MP_DEFINE_CONST_FUN_OBJ_1(
               network_wlan_dhcp_start_obj,
@@ -384,24 +292,17 @@ jobs:
           static mp_obj_t network_wlan_dhcp_stop(
               mp_obj_t self_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               esp_netif_t *netif =
                   network_wlan_get_ap_netif();
 
               esp_exceptions(
-                  esp_netif_dhcps_stop(
-                      netif
-                  )
+                  esp_netif_dhcps_stop(netif)
               );
 
               return mp_const_none;
           }
-
 
           static MP_DEFINE_CONST_FUN_OBJ_1(
               network_wlan_dhcp_stop_obj,
@@ -411,16 +312,18 @@ jobs:
 
           // ============================================================
           // 5. get_sta_list()
+          //
+          // Return:
+          // [
+          //   b"MAC",
+          //   ...
+          // ]
           // ============================================================
 
           static mp_obj_t network_wlan_get_sta_list(
               mp_obj_t self_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               wifi_sta_list_t station_list;
 
@@ -431,16 +334,11 @@ jobs:
               );
 
               mp_obj_t list =
-                  mp_obj_new_list(
-                      0,
-                      NULL
-                  );
+                  mp_obj_new_list(0, NULL);
 
-              for (
-                  int i = 0;
-                  i < station_list.num;
-                  ++i
-              ) {
+              for (int i = 0;
+                   i < station_list.num;
+                   ++i) {
 
                   mp_obj_list_append(
                       list,
@@ -454,7 +352,6 @@ jobs:
               return list;
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_1(
               network_wlan_get_sta_list_obj,
               network_wlan_get_sta_list
@@ -463,17 +360,16 @@ jobs:
 
           // ============================================================
           // 6. get_aid(mac)
+          //
+          // Return:
+          // AID integer
           // ============================================================
 
           static mp_obj_t network_wlan_get_aid(
               mp_obj_t self_in,
               mp_obj_t mac_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               mp_buffer_info_t bufinfo;
 
@@ -496,7 +392,6 @@ jobs:
               );
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_2(
               network_wlan_get_aid_obj,
               network_wlan_get_aid
@@ -505,17 +400,24 @@ jobs:
 
           // ============================================================
           // 7. get_sta_info(mac)
+          //
+          // Return:
+          // (
+          //   MAC,
+          //   RSSI,
+          //   AID,
+          //   phy_11b,
+          //   phy_11g,
+          //   phy_11n,
+          //   phy_lr
+          // )
           // ============================================================
 
           static mp_obj_t network_wlan_get_sta_info(
               mp_obj_t self_in,
               mp_obj_t mac_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               mp_buffer_info_t bufinfo;
 
@@ -532,22 +434,18 @@ jobs:
                   )
               );
 
-              for (
-                  int i = 0;
-                  i < station_list.num;
-                  ++i
-              ) {
+              for (int i = 0;
+                   i < station_list.num;
+                   ++i) {
 
                   wifi_sta_info_t *sta =
                       &station_list.sta[i];
 
-                  if (
-                      memcmp(
+                  if (memcmp(
                           sta->mac,
                           bufinfo.buf,
                           6
-                      ) == 0
-                  ) {
+                      ) == 0) {
 
                       uint16_t aid = 0;
 
@@ -606,7 +504,6 @@ jobs:
               return mp_const_none;
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_2(
               network_wlan_get_sta_info_obj,
               network_wlan_get_sta_info
@@ -615,17 +512,18 @@ jobs:
 
           // ============================================================
           // 8. dhcp_ip(mac)
+          //
+          // Return:
+          // "192.168.4.X"
+          //
+          // None if DHCP has no IP for that MAC.
           // ============================================================
 
           static mp_obj_t network_wlan_dhcp_ip(
               mp_obj_t self_in,
               mp_obj_t mac_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               mp_buffer_info_t bufinfo;
 
@@ -672,7 +570,6 @@ jobs:
               );
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_2(
               network_wlan_dhcp_ip_obj,
               network_wlan_dhcp_ip
@@ -687,11 +584,7 @@ jobs:
               mp_obj_t self_in,
               mp_obj_t mac_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               mp_buffer_info_t bufinfo;
 
@@ -718,7 +611,6 @@ jobs:
               return mp_const_none;
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_2(
               network_wlan_deauth_obj,
               network_wlan_deauth
@@ -733,19 +625,12 @@ jobs:
               mp_obj_t self_in,
               mp_obj_t aid_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               uint16_t aid =
-                  mp_obj_get_int(
-                      aid_in
-                  );
+                  mp_obj_get_int(aid_in);
 
               if (aid == 0) {
-
                   mp_raise_ValueError(
                       MP_ERROR_TEXT(
                           "AID 0 is reserved for deauth_all()"
@@ -762,7 +647,6 @@ jobs:
               return mp_const_none;
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_2(
               network_wlan_deauth_aid_obj,
               network_wlan_deauth_aid
@@ -776,21 +660,14 @@ jobs:
           static mp_obj_t network_wlan_deauth_all(
               mp_obj_t self_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               esp_exceptions(
-                  esp_wifi_deauth_sta(
-                      0
-                  )
+                  esp_wifi_deauth_sta(0)
               );
 
               return mp_const_none;
           }
-
 
           static MP_DEFINE_CONST_FUN_OBJ_1(
               network_wlan_deauth_all_obj,
@@ -805,11 +682,7 @@ jobs:
           static mp_obj_t network_wlan_get_inactive_time(
               mp_obj_t self_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               uint16_t seconds = 0;
 
@@ -825,7 +698,6 @@ jobs:
               );
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_1(
               network_wlan_get_inactive_time_obj,
               network_wlan_get_inactive_time
@@ -840,19 +712,12 @@ jobs:
               mp_obj_t self_in,
               mp_obj_t seconds_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               uint16_t seconds =
-                  mp_obj_get_int(
-                      seconds_in
-                  );
+                  mp_obj_get_int(seconds_in);
 
               if (seconds < 10) {
-
                   mp_raise_ValueError(
                       MP_ERROR_TEXT(
                           "AP inactive time minimum is 10 seconds"
@@ -870,7 +735,6 @@ jobs:
               return mp_const_none;
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_2(
               network_wlan_set_inactive_time_obj,
               network_wlan_set_inactive_time
@@ -879,16 +743,21 @@ jobs:
 
           // ============================================================
           // 14. get_ap_info()
+          //
+          // Return:
+          // (
+          //   SSID,
+          //   password,
+          //   channel,
+          //   max_connections,
+          //   authmode
+          // )
           // ============================================================
 
           static mp_obj_t network_wlan_get_ap_info(
               mp_obj_t self_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               wifi_config_t config;
 
@@ -910,17 +779,13 @@ jobs:
               items[0] =
                   mp_obj_new_bytes(
                       config.ap.ssid,
-                      strlen(
-                          (char *)config.ap.ssid
-                      )
+                      strlen((char *)config.ap.ssid)
                   );
 
               items[1] =
                   mp_obj_new_bytes(
                       config.ap.password,
-                      strlen(
-                          (char *)config.ap.password
-                      )
+                      strlen((char *)config.ap.password)
                   );
 
               items[2] =
@@ -944,7 +809,6 @@ jobs:
               );
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_1(
               network_wlan_get_ap_info_obj,
               network_wlan_get_ap_info
@@ -953,16 +817,14 @@ jobs:
 
           // ============================================================
           // 15. wifi_stats()
+          //
+          // Dumps WiFi driver statistics to the ESP console.
           // ============================================================
 
           static mp_obj_t network_wlan_wifi_stats(
               mp_obj_t self_in
           ) {
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               esp_exceptions(
                   esp_wifi_statis_dump(
@@ -973,7 +835,6 @@ jobs:
               return mp_const_none;
           }
 
-
           static MP_DEFINE_CONST_FUN_OBJ_1(
               network_wlan_wifi_stats_obj,
               network_wlan_wifi_stats
@@ -981,30 +842,21 @@ jobs:
 
           '''
 
-
           # ============================================================
           # INSERTAR FUNCIONES
           # ============================================================
 
-          marker = (
-              "static const mp_rom_map_elem_t "
-              "wlan_if_locals_dict_table[] = {"
-          )
-
+          marker = "static const mp_rom_map_elem_t wlan_if_locals_dict_table[] = {"
 
           if marker not in text:
               raise SystemExit(
-                  "ERROR: No se encontró "
-                  "wlan_if_locals_dict_table."
+                  "ERROR: No se encontró wlan_if_locals_dict_table."
               )
-
 
           if "network_wlan_dhcp_status_obj" in text:
               raise SystemExit(
-                  "ERROR: Las funciones nuevas "
-                  "ya existen en network_wlan.c."
+                  "ERROR: Las funciones nuevas ya existen en network_wlan.c."
               )
-
 
           text = text.replace(
               marker,
@@ -1014,14 +866,13 @@ jobs:
 
 
           # ============================================================
-          # REGISTRAR FUNCIONES
+          # REGISTRAR FUNCIONES EN network.WLAN
           # ============================================================
 
           table_marker = (
               '    { MP_ROM_QSTR(MP_QSTR_status), '
               'MP_ROM_PTR(&network_wlan_status_obj) },'
           )
-
 
           table_addition = '''
               { MP_ROM_QSTR(MP_QSTR_dhcp_status),
@@ -1069,13 +920,10 @@ jobs:
               { MP_ROM_QSTR(MP_QSTR_wifi_stats),
                 MP_ROM_PTR(&network_wlan_wifi_stats_obj) },'''
 
-
           if table_marker not in text:
               raise SystemExit(
-                  "ERROR: No se encontró la entrada "
-                  "status en la tabla WLAN."
+                  "ERROR: No se encontró la entrada status en la tabla WLAN."
               )
-
 
           text = text.replace(
               table_marker,
@@ -1093,14 +941,8 @@ jobs:
               encoding="utf-8"
           )
 
-
-          print(
-              "=============================================="
-          )
-          print(
-              "Parche C aplicado exitosamente."
-          )
-          print("")
+          print("==============================================")
+          print("Parche C aplicado exitosamente.")
           print("Funciones agregadas:")
           print("")
           print("  1.  ap.dhcp_status()")
@@ -1118,1438 +960,10 @@ jobs:
           print("  13. ap.set_inactive_time(seconds)")
           print("  14. ap.get_ap_info()")
           print("  15. ap.wifi_stats()")
-          print(
-              "=============================================="
-          )
-
+          print("==============================================")
           PY
 
-
           python3 patch.py
-
-
-      # ============================================================
-      # BLUETOOTH CLASSIC SPP
-      # ============================================================
-
-      - name: Agregar módulo Bluetooth Classic SPP
-        shell: bash
-        run: |
-
-          set -e
-
-
-          mkdir -p btserial
-
-
-          # ==========================================================
-          # CMAKE DEL MODULO
-          # ==========================================================
-
-          cat > btserial/micropython.cmake <<'EOF'
-
-          add_library(
-              usermod_btserial
-              INTERFACE
-          )
-
-          target_sources(
-              usermod_btserial
-              INTERFACE
-                  ${CMAKE_CURRENT_LIST_DIR}/btserial.c
-          )
-
-          target_include_directories(
-              usermod_btserial
-              INTERFACE
-                  ${CMAKE_CURRENT_LIST_DIR}
-          )
-
-          target_link_libraries(
-              usermod_btserial
-              INTERFACE
-                  bt
-          )
-
-          target_link_libraries(
-              usermod
-              INTERFACE
-                  usermod_btserial
-          )
-
-          EOF
-
-
-          # ==========================================================
-          # C MODULE
-          # ==========================================================
-
-          cat > btserial/btserial.c <<'EOF'
-
-          #include "py/runtime.h"
-          #include "py/objstr.h"
-          #include "py/mphal.h"
-
-          #include "esp_bt.h"
-          #include "esp_bt_main.h"
-          #include "esp_bt_device.h"
-          #include "esp_gap_bt_api.h"
-          #include "esp_spp_api.h"
-          #include "esp_mac.h"
-
-          #include "freertos/FreeRTOS.h"
-          #include "freertos/portmacro.h"
-
-          #include <string.h>
-          #include <stdbool.h>
-          #include <stdint.h>
-
-
-          // ============================================================
-          // CONFIG
-          // ============================================================
-
-          #define BT_RX_BUFFER_SIZE 4096
-          #define BT_SPP_CHANNEL 1
-
-
-          // ============================================================
-          // STATE
-          // ============================================================
-
-          static uint8_t rx_buffer[
-              BT_RX_BUFFER_SIZE
-          ];
-
-          static volatile size_t rx_head = 0;
-          static volatile size_t rx_tail = 0;
-
-          static portMUX_TYPE rx_mux =
-              portMUX_INITIALIZER_UNLOCKED;
-
-
-          static bool controller_initialized = false;
-          static bool controller_enabled = false;
-
-          static bool bluedroid_initialized = false;
-          static bool bluedroid_enabled = false;
-
-          static bool spp_initialized = false;
-
-          static bool bt_running = false;
-          static bool server_mode = false;
-          static bool connected = false;
-
-          static uint32_t spp_handle = 0;
-
-          static char device_name[64] =
-              "CYD_SPP";
-
-
-          // ============================================================
-          // RX BUFFER
-          // ============================================================
-
-          static size_t rx_available_internal(void) {
-
-              size_t head;
-              size_t tail;
-
-              portENTER_CRITICAL(
-                  &rx_mux
-              );
-
-              head = rx_head;
-              tail = rx_tail;
-
-              portEXIT_CRITICAL(
-                  &rx_mux
-              );
-
-              if (head >= tail) {
-                  return head - tail;
-              }
-
-              return (
-                  BT_RX_BUFFER_SIZE
-                  - tail
-                  + head
-              );
-          }
-
-
-          static void rx_push(
-              const uint8_t *data,
-              size_t len
-          ) {
-
-              portENTER_CRITICAL(
-                  &rx_mux
-              );
-
-              for (
-                  size_t i = 0;
-                  i < len;
-                  ++i
-              ) {
-
-                  size_t next =
-                      (
-                          rx_head + 1
-                      ) %
-                      BT_RX_BUFFER_SIZE;
-
-
-                  if (
-                      next == rx_tail
-                  ) {
-
-                      rx_tail =
-                          (
-                              rx_tail + 1
-                          ) %
-                          BT_RX_BUFFER_SIZE;
-                  }
-
-
-                  rx_buffer[
-                      rx_head
-                  ] = data[i];
-
-                  rx_head = next;
-              }
-
-              portEXIT_CRITICAL(
-                  &rx_mux
-              );
-          }
-
-
-          static size_t rx_pop(
-              uint8_t *out,
-              size_t max_len
-          ) {
-
-              size_t count = 0;
-
-              portENTER_CRITICAL(
-                  &rx_mux
-              );
-
-              while (
-                  count < max_len &&
-                  rx_tail != rx_head
-              ) {
-
-                  out[count++] =
-                      rx_buffer[rx_tail];
-
-                  rx_tail =
-                      (
-                          rx_tail + 1
-                      ) %
-                      BT_RX_BUFFER_SIZE;
-              }
-
-              portEXIT_CRITICAL(
-                  &rx_mux
-              );
-
-              return count;
-          }
-
-
-          static void rx_clear(void) {
-
-              portENTER_CRITICAL(
-                  &rx_mux
-              );
-
-              rx_head = 0;
-              rx_tail = 0;
-
-              portEXIT_CRITICAL(
-                  &rx_mux
-              );
-          }
-
-
-          // ============================================================
-          // GAP CALLBACK
-          // ============================================================
-
-          static void bt_gap_callback(
-              esp_bt_gap_cb_event_t event,
-              esp_bt_gap_cb_param_t *param
-          ) {
-
-              (void)event;
-              (void)param;
-          }
-
-
-          // ============================================================
-          // SPP CALLBACK
-          // ============================================================
-
-          static void bt_spp_callback(
-              esp_spp_cb_event_t event,
-              esp_spp_cb_param_t *param
-          ) {
-
-              switch (event) {
-
-                  case ESP_SPP_INIT_EVT:
-
-                      if (
-                          param->init.status ==
-                          ESP_SPP_SUCCESS
-                      ) {
-
-                          spp_initialized = true;
-                      }
-
-                      break;
-
-
-                  case ESP_SPP_START_EVT:
-
-                      break;
-
-
-                  case ESP_SPP_CL_INIT_EVT:
-
-                      break;
-
-
-                  case ESP_SPP_OPEN_EVT:
-
-                      if (
-                          param->open.status ==
-                          ESP_SPP_SUCCESS
-                      ) {
-
-                          spp_handle =
-                              param->open.handle;
-
-                          connected = true;
-
-                          rx_clear();
-                      }
-
-                      break;
-
-
-                  case ESP_SPP_SRV_OPEN_EVT:
-
-                      if (
-                          param->srv_open.status ==
-                          ESP_SPP_SUCCESS
-                      ) {
-
-                          spp_handle =
-                              param->srv_open.handle;
-
-                          connected = true;
-
-                          rx_clear();
-                      }
-
-                      break;
-
-
-                  case ESP_SPP_CLOSE_EVT:
-
-                      if (
-                          param->close.handle ==
-                          spp_handle
-                      ) {
-
-                          connected = false;
-
-                          spp_handle = 0;
-
-                          rx_clear();
-                      }
-
-                      break;
-
-
-                  case ESP_SPP_DATA_IND_EVT:
-
-                      if (
-                          param->data_ind.status ==
-                          ESP_SPP_SUCCESS &&
-                          param->data_ind.data != NULL &&
-                          param->data_ind.len > 0
-                      ) {
-
-                          rx_push(
-                              param->data_ind.data,
-                              param->data_ind.len
-                          );
-                      }
-
-                      break;
-
-
-                  default:
-
-                      break;
-              }
-          }
-
-
-          // ============================================================
-          // START BLUETOOTH
-          // ============================================================
-
-          static void bt_start_internal(
-              const char *name
-          ) {
-
-              if (bt_running) {
-                  return;
-              }
-
-
-              if (name != NULL) {
-
-                  size_t len =
-                      strlen(name);
-
-                  if (
-                      len >=
-                      sizeof(device_name)
-                  ) {
-
-                      len =
-                          sizeof(device_name)
-                          - 1;
-                  }
-
-                  memcpy(
-                      device_name,
-                      name,
-                      len
-                  );
-
-                  device_name[len] =
-                      '\0';
-              }
-
-
-              // --------------------------------------------------------
-              // BT CONTROLLER
-              // --------------------------------------------------------
-
-              esp_bt_controller_status_t status =
-                  esp_bt_controller_get_status();
-
-
-              if (
-                  status ==
-                  ESP_BT_CONTROLLER_STATUS_IDLE
-              ) {
-
-                  esp_bt_controller_config_t cfg =
-                      BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-
-
-                  esp_err_t err =
-                      esp_bt_controller_init(
-                          &cfg
-                      );
-
-
-                  if (
-                      err != ESP_OK
-                  ) {
-
-                      mp_raise_msg_varg(
-                          &mp_type_RuntimeError,
-                          MP_ERROR_TEXT(
-                              "BT controller init failed: %s"
-                          ),
-                          esp_err_to_name(err)
-                      );
-                  }
-
-
-                  controller_initialized =
-                      true;
-              }
-
-
-              status =
-                  esp_bt_controller_get_status();
-
-
-              if (
-                  status ==
-                  ESP_BT_CONTROLLER_STATUS_INITED
-              ) {
-
-                  esp_err_t err =
-                      esp_bt_controller_enable(
-                          ESP_BT_MODE_CLASSIC_BT
-                      );
-
-
-                  if (
-                      err != ESP_OK
-                  ) {
-
-                      mp_raise_msg_varg(
-                          &mp_type_RuntimeError,
-                          MP_ERROR_TEXT(
-                              "BT controller enable failed: %s"
-                          ),
-                          esp_err_to_name(err)
-                      );
-                  }
-
-
-                  controller_enabled =
-                      true;
-              }
-
-
-              // --------------------------------------------------------
-              // BLUEDROID
-              // --------------------------------------------------------
-
-              esp_bluedroid_status_t bd_status =
-                  esp_bluedroid_get_status();
-
-
-              if (
-                  bd_status ==
-                  ESP_BLUEDROID_STATUS_UNINITIALIZED
-              ) {
-
-                  esp_err_t err =
-                      esp_bluedroid_init();
-
-
-                  if (
-                      err != ESP_OK
-                  ) {
-
-                      mp_raise_msg_varg(
-                          &mp_type_RuntimeError,
-                          MP_ERROR_TEXT(
-                              "Bluedroid init failed: %s"
-                          ),
-                          esp_err_to_name(err)
-                      );
-                  }
-
-
-                  bluedroid_initialized =
-                      true;
-              }
-
-
-              bd_status =
-                  esp_bluedroid_get_status();
-
-
-              if (
-                  bd_status ==
-                  ESP_BLUEDROID_STATUS_INITIALIZED
-              ) {
-
-                  esp_err_t err =
-                      esp_bluedroid_enable();
-
-
-                  if (
-                      err != ESP_OK
-                  ) {
-
-                      mp_raise_msg_varg(
-                          &mp_type_RuntimeError,
-                          MP_ERROR_TEXT(
-                              "Bluedroid enable failed: %s"
-                          ),
-                          esp_err_to_name(err)
-                      );
-                  }
-
-
-                  bluedroid_enabled =
-                      true;
-              }
-
-
-              // --------------------------------------------------------
-              // GAP CALLBACK
-              // --------------------------------------------------------
-
-              esp_err_t err =
-                  esp_bt_gap_register_callback(
-                      bt_gap_callback
-                  );
-
-
-              if (
-                  err != ESP_OK &&
-                  err != ESP_ERR_INVALID_STATE
-              ) {
-
-                  mp_raise_msg_varg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "GAP callback failed: %s"
-                      ),
-                      esp_err_to_name(err)
-                  );
-              }
-
-
-              // --------------------------------------------------------
-              // DEVICE NAME
-              // --------------------------------------------------------
-
-              err =
-                  esp_bt_gap_set_device_name(
-                      device_name
-                  );
-
-
-              if (
-                  err != ESP_OK
-              ) {
-
-                  mp_raise_msg_varg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "BT name failed: %s"
-                      ),
-                      esp_err_to_name(err)
-                  );
-              }
-
-
-              // --------------------------------------------------------
-              // DISCOVERABLE + CONNECTABLE
-              // --------------------------------------------------------
-
-              err =
-                  esp_bt_gap_set_scan_mode(
-                      ESP_BT_CONNECTABLE,
-                      ESP_BT_GENERAL_DISCOVERABLE
-                  );
-
-
-              if (
-                  err != ESP_OK
-              ) {
-
-                  mp_raise_msg_varg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "BT scan mode failed: %s"
-                      ),
-                      esp_err_to_name(err)
-                  );
-              }
-
-
-              // --------------------------------------------------------
-              // SPP CALLBACK
-              // --------------------------------------------------------
-
-              err =
-                  esp_spp_register_callback(
-                      bt_spp_callback
-                  );
-
-
-              if (
-                  err != ESP_OK
-              ) {
-
-                  mp_raise_msg_varg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "SPP callback failed: %s"
-                      ),
-                      esp_err_to_name(err)
-                  );
-              }
-
-
-              // --------------------------------------------------------
-              // SPP CALLBACK MODE
-              // --------------------------------------------------------
-              //
-              // This is the important part:
-              //
-              // ESP_SPP_MODE_CB
-              //
-              // received data arrives through
-              // ESP_SPP_DATA_IND_EVT.
-              //
-              // --------------------------------------------------------
-
-              err =
-                  esp_spp_init(
-                      ESP_SPP_MODE_CB
-                  );
-
-
-              if (
-                  err != ESP_OK
-              ) {
-
-                  mp_raise_msg_varg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "SPP init failed: %s"
-                      ),
-                      esp_err_to_name(err)
-                  );
-              }
-
-
-              bt_running = true;
-          }
-
-
-          // ============================================================
-          // begin(name, server)
-          // ============================================================
-
-          static mp_obj_t btserial_begin(
-              size_t n_args,
-              const mp_obj_t *args
-          ) {
-
-              const char *name =
-                  mp_obj_str_get_str(
-                      args[0]
-                  );
-
-
-              server_mode =
-                  mp_obj_is_true(
-                      args[1]
-                  );
-
-
-              bt_start_internal(
-                  name
-              );
-
-
-              // --------------------------------------------------------
-              // Wait for ESP_SPP_INIT_EVT
-              // --------------------------------------------------------
-
-              for (
-                  int i = 0;
-                  i < 100;
-                  ++i
-              ) {
-
-                  if (
-                      spp_initialized
-                  ) {
-                      break;
-                  }
-
-                  mp_hal_delay_ms(10);
-              }
-
-
-              if (
-                  !spp_initialized
-              ) {
-
-                  mp_raise_msg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "SPP initialization timeout"
-                      )
-                  );
-              }
-
-
-              // --------------------------------------------------------
-              // SERVER
-              // --------------------------------------------------------
-
-              if (server_mode) {
-
-                  esp_err_t err =
-                      esp_spp_start_srv(
-                          ESP_SPP_SEC_NONE,
-                          ESP_SPP_ROLE_SLAVE,
-                          BT_SPP_CHANNEL,
-                          device_name
-                      );
-
-
-                  if (
-                      err != ESP_OK
-                  ) {
-
-                      mp_raise_msg_varg(
-                          &mp_type_RuntimeError,
-                          MP_ERROR_TEXT(
-                              "SPP server failed: %s"
-                          ),
-                          esp_err_to_name(err)
-                      );
-                  }
-              }
-
-
-              return mp_const_none;
-          }
-
-
-          static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
-              btserial_begin_obj,
-              2,
-              2,
-              btserial_begin
-          );
-
-
-          // ============================================================
-          // connect(mac)
-          // ============================================================
-
-          static mp_obj_t btserial_connect(
-              mp_obj_t mac_obj
-          ) {
-
-              mp_buffer_info_t buf;
-
-
-              mp_get_buffer_raise(
-                  mac_obj,
-                  &buf,
-                  MP_BUFFER_READ
-              );
-
-
-              if (
-                  buf.len != 6
-              ) {
-
-                  mp_raise_ValueError(
-                      MP_ERROR_TEXT(
-                          "MAC must be 6 bytes"
-                      )
-                  );
-              }
-
-
-              if (!bt_running) {
-
-                  mp_raise_msg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "Bluetooth not started"
-                      )
-                  );
-              }
-
-
-              if (!spp_initialized) {
-
-                  mp_raise_msg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "SPP not initialized"
-                      )
-                  );
-              }
-
-
-              esp_bd_addr_t addr;
-
-
-              memcpy(
-                  addr,
-                  buf.buf,
-                  6
-              );
-
-
-              esp_err_t err =
-                  esp_spp_connect(
-                      ESP_SPP_SEC_NONE,
-                      ESP_SPP_ROLE_MASTER,
-                      BT_SPP_CHANNEL,
-                      addr
-                  );
-
-
-              if (
-                  err != ESP_OK
-              ) {
-
-                  mp_raise_msg_varg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "SPP connect failed: %s"
-                      ),
-                      esp_err_to_name(err)
-                  );
-              }
-
-
-              return mp_const_none;
-          }
-
-
-          static MP_DEFINE_CONST_FUN_OBJ_1(
-              btserial_connect_obj,
-              btserial_connect
-          );
-
-
-          // ============================================================
-          // connected()
-          // ============================================================
-
-          static mp_obj_t btserial_connected(void) {
-
-              return mp_obj_new_bool(
-                  connected
-              );
-          }
-
-
-          static MP_DEFINE_CONST_FUN_OBJ_0(
-              btserial_connected_obj,
-              btserial_connected
-          );
-
-
-          // ============================================================
-          // available()
-          // ============================================================
-
-          static mp_obj_t btserial_available(void) {
-
-              return MP_OBJ_NEW_SMALL_INT(
-                  rx_available_internal()
-              );
-          }
-
-
-          static MP_DEFINE_CONST_FUN_OBJ_0(
-              btserial_available_obj,
-              btserial_available
-          );
-
-
-          // ============================================================
-          // read([n])
-          // ============================================================
-
-          static mp_obj_t btserial_read(
-              size_t n_args,
-              const mp_obj_t *args
-          ) {
-
-              size_t available =
-                  rx_available_internal();
-
-
-              size_t wanted;
-
-
-              if (
-                  n_args == 0
-              ) {
-
-                  wanted =
-                      available;
-
-              } else {
-
-                  mp_int_t n =
-                      mp_obj_get_int(
-                          args[0]
-                      );
-
-
-                  if (
-                      n < 0
-                  ) {
-
-                      wanted =
-                          available;
-
-                  } else {
-
-                      wanted =
-                          (size_t)n;
-                  }
-              }
-
-
-              if (
-                  wanted > available
-              ) {
-
-                  wanted =
-                      available;
-              }
-
-
-              if (
-                  wanted == 0
-              ) {
-
-                  return mp_const_empty_bytes;
-              }
-
-
-              vstr_t vstr;
-
-
-              vstr_init_len(
-                  &vstr,
-                  wanted
-              );
-
-
-              size_t got =
-                  rx_pop(
-                      (uint8_t *)vstr.buf,
-                      wanted
-                  );
-
-
-              if (
-                  got != wanted
-              ) {
-
-                  vstr_cut_tail_bytes(
-                      &vstr,
-                      wanted - got
-                  );
-              }
-
-
-              return mp_obj_new_bytes_from_vstr(
-                  &vstr
-              );
-          }
-
-
-          static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
-              btserial_read_obj,
-              0,
-              1,
-              btserial_read
-          );
-
-
-          // ============================================================
-          // write(data)
-          // ============================================================
-
-          static mp_obj_t btserial_write(
-              mp_obj_t data_obj
-          ) {
-
-              if (!connected) {
-
-                  mp_raise_OSError(
-                      MP_ENOTCONN
-                  );
-              }
-
-
-              mp_buffer_info_t buf;
-
-
-              mp_get_buffer_raise(
-                  data_obj,
-                  &buf,
-                  MP_BUFFER_READ
-              );
-
-
-              if (
-                  buf.len == 0
-              ) {
-
-                  return MP_OBJ_NEW_SMALL_INT(
-                      0
-                  );
-              }
-
-
-              esp_err_t err =
-                  esp_spp_write(
-                      spp_handle,
-                      buf.len,
-                      (uint8_t *)buf.buf
-                  );
-
-
-              if (
-                  err != ESP_OK
-              ) {
-
-                  mp_raise_msg_varg(
-                      &mp_type_OSError,
-                      MP_ERROR_TEXT(
-                          "SPP write failed: %s"
-                      ),
-                      esp_err_to_name(err)
-                  );
-              }
-
-
-              return MP_OBJ_NEW_SMALL_INT(
-                  buf.len
-              );
-          }
-
-
-          static MP_DEFINE_CONST_FUN_OBJ_1(
-              btserial_write_obj,
-              btserial_write
-          );
-
-
-          // ============================================================
-          // disconnect()
-          // ============================================================
-
-          static mp_obj_t btserial_disconnect(void) {
-
-              if (
-                  connected
-              ) {
-
-                  esp_spp_disconnect(
-                      spp_handle
-                  );
-              }
-
-
-              return mp_const_none;
-          }
-
-
-          static MP_DEFINE_CONST_FUN_OBJ_0(
-              btserial_disconnect_obj,
-              btserial_disconnect
-          );
-
-
-          // ============================================================
-          // address()
-          // ============================================================
-
-          static mp_obj_t btserial_address(void) {
-
-              esp_bd_addr_t addr;
-
-
-              esp_err_t err =
-                  esp_read_mac(
-                      addr,
-                      ESP_MAC_BT
-                  );
-
-
-              if (
-                  err != ESP_OK
-              ) {
-
-                  mp_raise_msg_varg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT(
-                          "BT MAC failed: %s"
-                      ),
-                      esp_err_to_name(err)
-                  );
-              }
-
-
-              return mp_obj_new_bytes(
-                  addr,
-                  6
-              );
-          }
-
-
-          static MP_DEFINE_CONST_FUN_OBJ_0(
-              btserial_address_obj,
-              btserial_address
-          );
-
-
-          // ============================================================
-          // stop()
-          // ============================================================
-
-          static mp_obj_t btserial_stop(void) {
-
-              if (!bt_running) {
-                  return mp_const_none;
-              }
-
-
-              if (
-                  connected
-              ) {
-
-                  esp_spp_disconnect(
-                      spp_handle
-                  );
-
-                  connected = false;
-
-                  spp_handle = 0;
-              }
-
-
-              if (
-                  spp_initialized
-              ) {
-
-                  esp_spp_deinit();
-
-                  spp_initialized =
-                      false;
-              }
-
-
-              if (
-                  bluedroid_enabled
-              ) {
-
-                  esp_bluedroid_disable();
-
-                  bluedroid_enabled =
-                      false;
-              }
-
-
-              if (
-                  bluedroid_initialized
-              ) {
-
-                  esp_bluedroid_deinit();
-
-                  bluedroid_initialized =
-                      false;
-              }
-
-
-              if (
-                  controller_enabled
-              ) {
-
-                  esp_bt_controller_disable();
-
-                  controller_enabled =
-                      false;
-              }
-
-
-              if (
-                  controller_initialized
-              ) {
-
-                  esp_bt_controller_deinit();
-
-                  controller_initialized =
-                      false;
-              }
-
-
-              bt_running = false;
-
-              server_mode = false;
-
-              rx_clear();
-
-
-              return mp_const_none;
-          }
-
-
-          static MP_DEFINE_CONST_FUN_OBJ_0(
-              btserial_stop_obj,
-              btserial_stop
-          );
-
-
-          // ============================================================
-          // MODULE TABLE
-          // ============================================================
-
-          static const mp_rom_map_elem_t
-          btserial_module_globals_table[] = {
-
-              {
-                  MP_ROM_QSTR(
-                      MP_QSTR___name__
-                  ),
-                  MP_ROM_QSTR(
-                      MP_QSTR_btserial
-                  )
-              },
-
-
-              {
-                  MP_ROM_QSTR(
-                      MP_QSTR_begin
-                  ),
-                  MP_ROM_PTR(
-                      &btserial_begin_obj
-                  )
-              },
-
-
-              {
-                  MP_ROM_QSTR(
-                      MP_QSTR_connect
-                  ),
-                  MP_ROM_PTR(
-                      &btserial_connect_obj
-                  )
-              },
-
-
-              {
-                  MP_ROM_QSTR(
-                      MP_QSTR_connected
-                  ),
-                  MP_ROM_PTR(
-                      &btserial_connected_obj
-                  )
-              },
-
-
-              {
-                  MP_ROM_QSTR(
-                      MP_QSTR_available
-                  ),
-                  MP_ROM_PTR(
-                      &btserial_available_obj
-                  )
-              },
-
-
-              {
-                  MP_ROM_QSTR(
-                      MP_QSTR_read
-                  ),
-                  MP_ROM_PTR(
-                      &btserial_read_obj
-                  )
-              },
-
-
-              {
-                  MP_ROM_QSTR(
-                      MP_QSTR_write
-                  ),
-                  MP_ROM_PTR(
-                      &btserial_write_obj
-                  )
-              },
-
-
-              {
-                  MP_ROM_QSTR(
-                      MP_QSTR_disconnect
-                  ),
-                  MP_ROM_PTR(
-                      &btserial_disconnect_obj
-                  )
-              },
-
-
-              {
-                  MP_ROM_QSTR(
-                      MP_QSTR_address
-                  ),
-                  MP_ROM_PTR(
-                      &btserial_address_obj
-                  )
-              },
-
-
-              {
-                  MP_ROM_QSTR(
-                      MP_QSTR_stop
-                  ),
-                  MP_ROM_PTR(
-                      &btserial_stop_obj
-                  )
-              },
-          };
-
-
-          // ============================================================
-          // MODULE DICT
-          // ============================================================
-
-          static MP_DEFINE_CONST_DICT(
-              btserial_module_globals,
-              btserial_module_globals_table
-          );
-
-
-          // ============================================================
-          // MODULE
-          // ============================================================
-
-          const mp_obj_module_t
-          btserial_user_cmodule = {
-
-              .base = {
-                  &mp_type_module
-              },
-
-              .globals =
-                  (mp_obj_dict_t *)
-                  &btserial_module_globals,
-          };
-
-
-          MP_REGISTER_MODULE(
-              MP_QSTR_btserial,
-              btserial_user_cmodule
-          );
-
-          EOF
-
-
-          echo ""
-          echo "=============================================="
-          echo "Bluetooth Classic SPP"
-          echo "=============================================="
-          echo ""
-          echo "CMake:"
-          cat btserial/micropython.cmake
-          echo ""
-          echo "Archivos:"
-          ls -lh btserial/
-          echo ""
-          echo "=============================================="
-
-
-      # ============================================================
-      # COMPILAR FIRMWARE
-      # ============================================================
 
       - name: Compilar firmware ESP32
         id: compile
@@ -2562,61 +976,11 @@ jobs:
             PART_CSV=partitions-4mb-custom.csv \
             DISPLAY=st7789 \
             INDEV=xpt2046 \
-            USER_C_MODULES="${GITHUB_WORKSPACE}/btserial/micropython.cmake" \
-            CONFIG_BT_ENABLED=y \
-            CONFIG_BT_BLUEDROID_ENABLED=y \
-            CONFIG_BT_CLASSIC_ENABLED=y \
-            CONFIG_BT_SPP_ENABLED=y \
             --flash-size=4 \
             --optimize-size \
             --ccache \
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
-
-
-      # ============================================================
-      # VERIFICAR FIRMWARE
-      # ============================================================
-
-      - name: Verificar firmware generado
-        if: success()
-        shell: bash
-        run: |
-          set -e
-
-          FIRMWARE="build/lvgl_micropy_ESP32_GENERIC-4.bin"
-
-          echo "=============================================="
-          echo "Buscando firmware"
-          echo "=============================================="
-          echo ""
-
-          if [ ! -f "$FIRMWARE" ]; then
-            echo "ERROR: No se encontró:"
-            echo "$FIRMWARE"
-            echo ""
-            echo "Todos los BIN encontrados:"
-            find . -type f -name "*.bin" -print
-            echo ""
-            echo "Últimas líneas del build:"
-            tail -n 200 build.log
-            exit 1
-          fi
-
-          echo "Firmware encontrado:"
-          ls -lh "$FIRMWARE"
-
-          echo ""
-          echo "Tamaño en bytes:"
-          stat -c "%s" "$FIRMWARE"
-
-          echo ""
-          echo "=============================================="
-
-
-      # ============================================================
-      # EMPAQUETAR
-      # ============================================================
 
       - name: Empaquetar firmware generado por LVGL MicroPython
         if: success()
@@ -2634,11 +998,10 @@ jobs:
             exit 1
           fi
 
-          cp "$FIRMWARE" \
-            final_firmware/firmware_merged_0x0.bin
+          cp "$FIRMWARE" final_firmware/firmware_merged_0x0.bin
 
-          cp "$FIRMWARE" \
-            final_firmware/lvgl_micropy_ESP32_GENERIC-4.bin
+          # También conservar el nombre original generado por el builder.
+          cp "$FIRMWARE" final_firmware/lvgl_micropy_ESP32_GENERIC-4.bin
 
           echo "Firmware encontrado:"
           ls -lh "$FIRMWARE"
@@ -2647,22 +1010,12 @@ jobs:
           echo "Archivos finales:"
           ls -lh final_firmware/
 
-
-      # ============================================================
-      # SUBIR FIRMWARE
-      # ============================================================
-
       - name: Subir Firmware
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: firmware-cyd-st7789
           path: final_firmware/
-
-
-      # ============================================================
-      # SUBIR LOGS
-      # ============================================================
 
       - name: Subir Logs
         if: always()
