@@ -26,17 +26,12 @@ jobs:
             ninja-build \
             ccache \
             libusb-1.0-0-dev
-
           pip install esptool
 
       - name: Aplicar parche en network_wlan.c y Tabla de Particiones Ampliada
         shell: bash
         run: |
-
-          # =========================================================
-          # 1. TABLA DE PARTICIONES PERSONALIZADA 4MB
-          # =========================================================
-
+          # 1. Crear tabla de particiones personalizada de 4MB con 3.2MB para la App (Factory)
           cat > lib/micropython/ports/esp32/partitions-4mb-custom.csv <<'EOF'
           # Name,   Type, SubType, Offset,  Size, Flags
           nvs,      data, nvs,     0x9000,  0x6000,
@@ -44,73 +39,29 @@ jobs:
           factory,  app,  factory, 0x10000, 0x330000,
           EOF
 
-
-          # =========================================================
-          # 2. PARCHE network_wlan.c
-          # =========================================================
-
+          # 2. Aplicar parche C en network_wlan.c
           cat > patch.py <<'PY'
           import re
           from pathlib import Path
 
-
-          path = Path(
-              "lib/micropython/ports/esp32/network_wlan.c"
-          )
-
+          path = Path("lib/micropython/ports/esp32/network_wlan.c")
 
           if not path.exists():
-              raise SystemExit(
-                  f"ERROR: No se encontró el archivo en {path}"
-              )
+              raise SystemExit(f"ERROR: No se encontró el archivo en {path}")
 
+          text = path.read_text(encoding="utf-8")
 
-          text = path.read_text(
-              encoding="utf-8"
-          )
-
-
-          # =========================================================
-          # HEADERS
-          # =========================================================
-
+          # Header de utilidades de red de MicroPython
           if '#include "shared/netutils/netutils.h"' not in text:
-              text = (
-                  '#include "shared/netutils/netutils.h"\n'
-                  + text
-              )
+              text = '#include "shared/netutils/netutils.h"\n' + text
 
-
-          if '#include "esp_wifi.h"' not in text:
-              text = (
-                  '#include "esp_wifi.h"\n'
-                  + text
-              )
-
-
+          # Header oficial de ESP-IDF 5.5.1 para:
+          # wifi_sta_mac_ip_list_t
+          # esp_wifi_ap_get_sta_list_with_ip()
           if '#include "esp_wifi_ap_get_sta_list.h"' not in text:
-              text = (
-                  '#include "esp_wifi_ap_get_sta_list.h"\n'
-                  + text
-              )
+              text = '#include "esp_wifi_ap_get_sta_list.h"\n' + text
 
-
-          # =========================================================
-          # REEMPLAZAR STATIONS
-          #
-          # Conservamos exactamente el comportamiento:
-          #
-          # ap.status("stations")
-          #
-          # devuelve:
-          #
-          # [
-          #     (MAC, IP),
-          #     ...
-          # ]
-          # =========================================================
-
-          patch_stations = r"""        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations): {
+          patch_code = """        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations): {
                       // Return list of connected stations with MAC + IPv4.
                       require_if(args[0], ESP_IF_WIFI_AP);
 
@@ -137,7 +88,6 @@ jobs:
                           (esp_netif_pair_mac_ip_t *)mac_ip_list.sta;
 
                       for (int i = 0; i < count; ++i) {
-
                           mp_obj_tuple_t *tuple =
                               mp_obj_new_tuple(2, NULL);
 
@@ -164,172 +114,80 @@ jobs:
                       return list;
                   }"""
 
-
-          pattern_stations = re.compile(
-              r'case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_stations\):'
-              r'.*?'
-              r'(?=\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_rssi\):)',
+          pattern = re.compile(
+              r'case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_stations\):.*?(?=\s*case\s+\(uintptr_t\)MP_OBJ_NEW_QSTR\(MP_QSTR_rssi\):)',
               re.DOTALL
           )
 
-
-          text, count = pattern_stations.subn(
-              patch_stations,
+          new_text, count = pattern.subn(
+              patch_code + "\n",
               text
           )
 
-
           if count == 0:
               raise SystemExit(
-                  "ERROR: No se pudo localizar MP_QSTR_stations."
+                  "ERROR: No se pudo reemplazar la sección MP_QSTR_stations."
               )
 
+          text = new_text
 
-          # =========================================================
-          # FUNCION: deauth()
-          #
-          # Expulsa TODAS las estaciones asociadas al SoftAP.
-          #
-          # ESP-IDF:
-          #
-          # esp_wifi_deauth_sta(0)
-          #
-          # AID=0 => todas las estaciones.
-          # =========================================================
+          # ============================================================
+          # NUEVO: funciones de control directo del SoftAP
+          # ============================================================
 
-          deauth_function = r"""
-          static mp_obj_t network_wlan_deauth(mp_obj_t self_in) {
+          new_functions = r'''
+          // ============================================================
+          // SoftAP station control
+          // ============================================================
 
-              wlan_if_obj_t *self =
-                  MP_OBJ_TO_PTR(self_in);
+          // Expulsa una estación usando su MAC.
+          // Ejemplo desde MicroPython:
+          // ap.deauth(b"\xAA\xBB\xCC\xDD\xEE\xFF")
+          static mp_obj_t network_wlan_deauth(mp_obj_t self_in, mp_obj_t mac_in) {
+              require_if(self_in, ESP_IF_WIFI_AP);
 
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
+              mp_buffer_info_t bufinfo;
+              mp_get_buffer_raise(mac_in, &bufinfo, MP_BUFFER_READ);
 
-              esp_exceptions(
-                  esp_wifi_deauth_sta(0)
-              );
-
-              return mp_const_none;
-          }
-
-          static MP_DEFINE_CONST_FUN_OBJ_1(
-              network_wlan_deauth_obj,
-              network_wlan_deauth
-          );
-          """
-
-
-          # =========================================================
-          # FUNCION: deauth_aid(aid)
-          #
-          # Expulsa una estación usando su AID.
-          # =========================================================
-
-          deauth_aid_function = r"""
-          static mp_obj_t network_wlan_deauth_aid(
-              mp_obj_t self_in,
-              mp_obj_t aid_in
-          ) {
-
-              wlan_if_obj_t *self =
-                  MP_OBJ_TO_PTR(self_in);
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
-
-              int aid =
-                  mp_obj_get_int(aid_in);
-
-              if (aid <= 0 || aid > 2007) {
-                  mp_raise_ValueError(
-                      MP_ERROR_TEXT("invalid AID")
-                  );
+              if (bufinfo.len != 6) {
+                  mp_raise_ValueError(MP_ERROR_TEXT("MAC must be 6 bytes"));
               }
 
+              uint16_t aid = 0;
+
               esp_exceptions(
-                  esp_wifi_deauth_sta(
-                      (uint16_t)aid
+                  esp_wifi_ap_get_sta_aid(
+                      (const uint8_t *)bufinfo.buf,
+                      &aid
                   )
+              );
+
+              esp_exceptions(
+                  esp_wifi_deauth_sta(aid)
               );
 
               return mp_const_none;
           }
 
           static MP_DEFINE_CONST_FUN_OBJ_2(
-              network_wlan_deauth_aid_obj,
-              network_wlan_deauth_aid
+              network_wlan_deauth_obj,
+              network_wlan_deauth
           );
-          """
 
 
-          # =========================================================
-          # FUNCION: deauth_mac(mac)
-          #
-          # mac debe ser bytes de 6 bytes.
-          #
-          # Ejemplo:
-          #
-          # ap.deauth_mac(b'\\xaa\\xbb\\xcc\\xdd\\xee\\xff')
-          #
-          # Internamente:
-          #
-          # MAC -> AID -> deauth(AID)
-          # =========================================================
-
-          deauth_mac_function = r"""
-          static mp_obj_t network_wlan_deauth_mac(
+          // Expulsa una estación directamente usando su AID.
+          // ap.deauth_aid(aid)
+          static mp_obj_t network_wlan_deauth_aid(
               mp_obj_t self_in,
-              mp_obj_t mac_in
+              mp_obj_t aid_in
           ) {
+              require_if(self_in, ESP_IF_WIFI_AP);
 
-              wlan_if_obj_t *self =
-                  MP_OBJ_TO_PTR(self_in);
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
-
-              mp_buffer_info_t bufinfo;
-
-              mp_get_buffer_raise(
-                  mac_in,
-                  &bufinfo,
-                  MP_BUFFER_READ
-              );
-
-              if (bufinfo.len != 6) {
-                  mp_raise_ValueError(
-                      MP_ERROR_TEXT(
-                          "MAC must be 6 bytes"
-                      )
-                  );
-              }
-
-              uint16_t aid = 0;
-
-              esp_err_t err =
-                  esp_wifi_ap_get_sta_aid(
-                      (const uint8_t *)bufinfo.buf,
-                      &aid
-                  );
-
-              if (err == ESP_ERR_NOT_FOUND) {
-                  mp_raise_OSError(
-                      MP_ENOENT
-                  );
-              }
-
-              esp_exceptions(err);
+              uint16_t aid = mp_obj_get_int(aid_in);
 
               if (aid == 0) {
-                  mp_raise_OSError(
-                      MP_ENOENT
+                  mp_raise_ValueError(
+                      MP_ERROR_TEXT("AID 0 is reserved for deauth_all()")
                   );
               }
 
@@ -341,50 +199,49 @@ jobs:
           }
 
           static MP_DEFINE_CONST_FUN_OBJ_2(
-              network_wlan_deauth_mac_obj,
-              network_wlan_deauth_mac
+              network_wlan_deauth_aid_obj,
+              network_wlan_deauth_aid
           );
-          """
 
 
-          # =========================================================
-          # FUNCION: set_inactive_time(seconds)
-          #
-          # SoftAP:
-          #
-          # mínimo = 10 segundos
-          # default = 300 segundos
-          # =========================================================
+          // Expulsa TODAS las estaciones asociadas.
+          // ap.deauth_all()
+          static mp_obj_t network_wlan_deauth_all(mp_obj_t self_in) {
+              require_if(self_in, ESP_IF_WIFI_AP);
 
-          inactive_set_function = r"""
-          static mp_obj_t network_wlan_set_inactive_time(
-              mp_obj_t self_in,
-              mp_obj_t sec_in
-          ) {
-
-              wlan_if_obj_t *self =
-                  MP_OBJ_TO_PTR(self_in);
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
+              esp_exceptions(
+                  esp_wifi_deauth_sta(0)
               );
 
-              int sec =
-                  mp_obj_get_int(sec_in);
+              return mp_const_none;
+          }
 
-              if (sec < 10 || sec > 65535) {
+          static MP_DEFINE_CONST_FUN_OBJ_1(
+              network_wlan_deauth_all_obj,
+              network_wlan_deauth_all
+          );
+
+
+          // Cambia el tiempo de inactividad del SoftAP.
+          // ap.set_inactive_time(10)
+          static mp_obj_t network_wlan_set_inactive_time(
+              mp_obj_t self_in,
+              mp_obj_t seconds_in
+          ) {
+              require_if(self_in, ESP_IF_WIFI_AP);
+
+              uint16_t seconds = mp_obj_get_int(seconds_in);
+
+              if (seconds < 10) {
                   mp_raise_ValueError(
-                      MP_ERROR_TEXT(
-                          "inactive time must be 10..65535"
-                      )
+                      MP_ERROR_TEXT("minimum inactive time is 10 seconds")
                   );
               }
 
               esp_exceptions(
                   esp_wifi_set_inactive_time(
                       WIFI_IF_AP,
-                      (uint16_t)sec
+                      seconds
                   )
               );
 
@@ -395,152 +252,104 @@ jobs:
               network_wlan_set_inactive_time_obj,
               network_wlan_set_inactive_time
           );
-          """
 
 
-          # =========================================================
-          # FUNCION: get_inactive_time()
-          # =========================================================
-
-          inactive_get_function = r"""
+          // Obtiene el tiempo de inactividad configurado.
+          // ap.get_inactive_time()
           static mp_obj_t network_wlan_get_inactive_time(
               mp_obj_t self_in
           ) {
+              require_if(self_in, ESP_IF_WIFI_AP);
 
-              wlan_if_obj_t *self =
-                  MP_OBJ_TO_PTR(self_in);
-
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
-
-              uint16_t sec = 0;
+              uint16_t seconds = 0;
 
               esp_exceptions(
                   esp_wifi_get_inactive_time(
                       WIFI_IF_AP,
-                      &sec
+                      &seconds
                   )
               );
 
-              return MP_OBJ_NEW_SMALL_INT(
-                  sec
-              );
+              return MP_OBJ_NEW_SMALL_INT(seconds);
           }
 
           static MP_DEFINE_CONST_FUN_OBJ_1(
               network_wlan_get_inactive_time_obj,
               network_wlan_get_inactive_time
           );
-          """
 
+          '''
 
-          # =========================================================
-          # INSERTAR FUNCIONES ANTES DEL DICT DE WLAN
-          # =========================================================
-
-          marker = (
-              "static const mp_rom_map_elem_t "
-              "wlan_if_locals_dict_table[] = {"
-          )
-
+          # Insertar las funciones justo antes de la tabla de métodos.
+          marker = "static const mp_rom_map_elem_t wlan_if_locals_dict_table[] = {"
 
           if marker not in text:
               raise SystemExit(
                   "ERROR: No se encontró wlan_if_locals_dict_table."
               )
 
-
-          all_functions = (
-              deauth_function
-              + deauth_aid_function
-              + deauth_mac_function
-              + inactive_set_function
-              + inactive_get_function
-              + "\n"
-          )
-
+          if "network_wlan_deauth_obj" in text:
+              raise SystemExit(
+                  "ERROR: Las funciones nuevas ya existen en network_wlan.c."
+              )
 
           text = text.replace(
               marker,
-              all_functions + marker,
+              new_functions + "\n" + marker,
               1
           )
 
+          # ============================================================
+          # NUEVO: registrar los métodos en network.WLAN
+          # ============================================================
 
-          # =========================================================
-          # AGREGAR FUNCIONES AL OBJETO WLAN
-          # =========================================================
-
-          locals_marker = (
-              '    { MP_ROM_QSTR(MP_QSTR_active), '
-              'MP_ROM_PTR(&network_wlan_active_obj) },'
+          table_marker = (
+              '    { MP_ROM_QSTR(MP_QSTR_status), '
+              'MP_ROM_PTR(&network_wlan_status_obj) },'
           )
 
-
-          if locals_marker not in text:
-              raise SystemExit(
-                  "ERROR: No se encontró la tabla locals de WLAN."
-              )
-
-
-          new_locals = r"""
+          table_addition = '''
               { MP_ROM_QSTR(MP_QSTR_deauth),
                 MP_ROM_PTR(&network_wlan_deauth_obj) },
 
               { MP_ROM_QSTR(MP_QSTR_deauth_aid),
                 MP_ROM_PTR(&network_wlan_deauth_aid_obj) },
 
-              { MP_ROM_QSTR(MP_QSTR_deauth_mac),
-                MP_ROM_PTR(&network_wlan_deauth_mac_obj) },
+              { MP_ROM_QSTR(MP_QSTR_deauth_all),
+                MP_ROM_PTR(&network_wlan_deauth_all_obj) },
 
               { MP_ROM_QSTR(MP_QSTR_set_inactive_time),
                 MP_ROM_PTR(&network_wlan_set_inactive_time_obj) },
 
               { MP_ROM_QSTR(MP_QSTR_get_inactive_time),
-                MP_ROM_PTR(&network_wlan_get_inactive_time_obj) },
-          """
+                MP_ROM_PTR(&network_wlan_get_inactive_time_obj) },'''
 
+          if table_marker not in text:
+              raise SystemExit(
+                  "ERROR: No se encontró la entrada status en la tabla WLAN."
+              )
 
           text = text.replace(
-              locals_marker,
-              locals_marker + "\n" + new_locals,
+              table_marker,
+              table_marker + "\n" + table_addition,
               1
           )
-
-
-          # =========================================================
-          # GUARDAR
-          # =========================================================
 
           path.write_text(
               text,
               encoding="utf-8"
           )
 
-
-          print("")
-          print("==========================================")
-          print("Parche WiFi aplicado correctamente")
-          print("==========================================")
-          print("")
-          print("Nuevas funciones:")
-          print("  ap.deauth()")
-          print("  ap.deauth_aid(aid)")
-          print("  ap.deauth_mac(mac)")
-          print("  ap.set_inactive_time(seconds)")
-          print("  ap.get_inactive_time()")
-          print("")
+          print("Parche C aplicado exitosamente.")
+          print("Funciones nuevas:")
+          print("  - ap.deauth(mac)")
+          print("  - ap.deauth_aid(aid)")
+          print("  - ap.deauth_all()")
+          print("  - ap.set_inactive_time(seconds)")
+          print("  - ap.get_inactive_time()")
           PY
 
-
           python3 patch.py
-
-
-      # =========================================================
-      # 3. COMPILAR FIRMWARE
-      # =========================================================
 
       - name: Compilar firmware ESP32
         id: compile
@@ -559,15 +368,9 @@ jobs:
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-
-      # =========================================================
-      # 4. CREAR FIRMWARE MERGED
-      # =========================================================
-
       - name: Crear imagen binaria unificada (0x0) y empaquetar
         if: success()
         run: |
-
           BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
 
           mkdir -p final_firmware
@@ -576,26 +379,16 @@ jobs:
           PARTITION="$BUILD_DIR/partition_table/partition-table.bin"
           APP="$BUILD_DIR/micropython.bin"
 
-
           if [ ! -f "$APP" ]; then
             APP="$BUILD_DIR/firmware.bin"
           fi
 
-
           # Copiar archivos individuales
+          cp "$BOOTLOADER" final_firmware/bootloader.bin
+          cp "$PARTITION" final_firmware/partition-table.bin
+          cp "$APP" final_firmware/app_micropython.bin
 
-          cp "$BOOTLOADER" \
-             final_firmware/bootloader.bin
-
-          cp "$PARTITION" \
-             final_firmware/partition-table.bin
-
-          cp "$APP" \
-             final_firmware/app_micropython.bin
-
-
-          # Crear imagen completa 0x0
-
+          # Unificar los 3 archivos en un único binario completo listo para grabar en 0x0
           python3 -m esptool --chip esp32 merge_bin \
             -o final_firmware/firmware_merged_0x0.bin \
             --flash_mode dio \
@@ -605,18 +398,8 @@ jobs:
             0x8000 "$PARTITION" \
             0x10000 "$APP"
 
-
-          echo ""
-          echo "=========================================="
-          echo "Firmware generado"
-          echo "=========================================="
-
+          echo "Archivos listos en final_firmware:"
           ls -lh final_firmware/
-
-
-      # =========================================================
-      # 5. SUBIR FIRMWARE
-      # =========================================================
 
       - name: Subir Firmware
         if: success()
@@ -624,11 +407,6 @@ jobs:
         with:
           name: firmware-cyd-st7789
           path: final_firmware/
-
-
-      # =========================================================
-      # 6. SUBIR LOG
-      # =========================================================
 
       - name: Subir Logs
         if: always()
