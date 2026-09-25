@@ -55,18 +55,19 @@ jobs:
           if '#include "shared/netutils/netutils.h"' not in text:
               text = '#include "shared/netutils/netutils.h"\n' + text
 
-          # Header oficial para wifi_sta_mac_ip_list_t
+          # Header oficial de ESP-IDF 5.5.1 para:
+          # wifi_sta_mac_ip_list_t
+          # esp_wifi_ap_get_sta_list_with_ip()
           if '#include "esp_wifi_ap_get_sta_list.h"' not in text:
               text = '#include "esp_wifi_ap_get_sta_list.h"\n' + text
 
-          # Header oficial ESP-NETIF para DHCP, ARP y esp_netif_pair_mac_ip_t
+          # Header oficial ESP-NETIF para:
+          # DHCP server
+          # DHCP client lookup
+          # ARP lookup
+          # esp_netif_pair_mac_ip_t
           if '#include "esp_netif.h"' not in text:
               text = '#include "esp_netif.h"\n' + text
-
-          # ============================================================
-          # stations()
-          # MAC + IP usando DHCP y ARP
-          # ============================================================
 
           patch_code = """        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations): {
                       // Return list of connected stations with MAC + IPv4.
@@ -95,15 +96,16 @@ jobs:
                           (esp_netif_pair_mac_ip_t *)mac_ip_list.sta;
 
                       for (int i = 0; i < count; ++i) {
-                          mp_obj_t tuple_items[2];
+                          mp_obj_tuple_t *tuple =
+                              mp_obj_new_tuple(2, NULL);
 
-                          tuple_items[0] =
+                          tuple->items[0] =
                               mp_obj_new_bytes(
                                   source[i].mac,
                                   sizeof(source[i].mac)
                               );
 
-                          tuple_items[1] =
+                          tuple->items[1] =
                               source[i].ip.addr != 0
                               ? netutils_format_ipv4_addr(
                                   (uint8_t *)(&source[i].ip),
@@ -113,7 +115,7 @@ jobs:
 
                           mp_obj_list_append(
                               list,
-                              mp_obj_new_tuple(2, tuple_items)
+                              MP_OBJ_FROM_PTR(tuple)
                           );
                       }
 
@@ -138,59 +140,49 @@ jobs:
           text = new_text
 
           # ============================================================
-          # NUEVAS FUNCIONES DE RED
+          # NUEVO: funciones de control directo del SoftAP
           # ============================================================
 
           new_functions = r'''
           // ============================================================
-          // SoftAP / DHCP / station control
+          // SoftAP station / DHCP control
           // ============================================================
 
 
           // ------------------------------------------------------------
-          // Helper interno:
-          // obtiene el esp-netif del SoftAP.
+          // DHCP status
           // ------------------------------------------------------------
+          // ap.dhcp_status()
+          //
+          // Devuelve:
+          //   "started"
+          //   "stopped"
+          //   "init"
+          //
+          static mp_obj_t network_wlan_dhcp_status(mp_obj_t self_in) {
+              require_if(self_in, ESP_IF_WIFI_AP);
 
-          static esp_netif_t *network_wlan_get_ap_netif(void) {
-              esp_netif_t *ap =
+              esp_netif_t *netif =
                   esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
 
-              if (ap == NULL) {
-                  mp_raise_RuntimeError(
-                      MP_ERROR_TEXT("AP netif not ready")
+              if (netif == NULL) {
+                  mp_raise_msg(
+                      &mp_type_RuntimeError,
+                      MP_ERROR_TEXT("AP netif not found")
                   );
               }
 
-              return ap;
-          }
-
-
-          // ------------------------------------------------------------
-          // dhcp_status()
-          //
-          // Devuelve:
-          // "started"
-          // "stopped"
-          // "init"
-          // ------------------------------------------------------------
-
-          static mp_obj_t network_wlan_dhcp_status(
-              mp_obj_t self_in
-          ) {
-              require_if(self_in, ESP_IF_WIFI_AP);
-
-              esp_netif_t *ap =
-                  network_wlan_get_ap_netif();
-
               esp_netif_dhcp_status_t status;
 
-              esp_exceptions(
+              esp_err_t err =
                   esp_netif_dhcps_get_status(
-                      ap,
+                      netif,
                       &status
-                  )
-              );
+                  );
+
+              if (err != ESP_OK) {
+                  mp_raise_OSError(err);
+              }
 
               if (status == ESP_NETIF_DHCP_STARTED) {
                   return MP_OBJ_NEW_QSTR(
@@ -216,25 +208,26 @@ jobs:
 
 
           // ------------------------------------------------------------
-          // dhcp_start()
+          // DHCP start
           // ------------------------------------------------------------
-
-          static mp_obj_t network_wlan_dhcp_start(
-              mp_obj_t self_in
-          ) {
+          // ap.dhcp_start()
+          //
+          static mp_obj_t network_wlan_dhcp_start(mp_obj_t self_in) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
-              esp_netif_t *ap =
-                  network_wlan_get_ap_netif();
+              esp_netif_t *netif =
+                  esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
 
-              esp_err_t err =
-                  esp_netif_dhcps_start(ap);
-
-              if (err != ESP_OK &&
-                  err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
-
-                  esp_exceptions(err);
+              if (netif == NULL) {
+                  mp_raise_msg(
+                      &mp_type_RuntimeError,
+                      MP_ERROR_TEXT("AP netif not found")
+                  );
               }
+
+              esp_exceptions(
+                  esp_netif_dhcps_start(netif)
+              );
 
               return mp_const_none;
           }
@@ -246,25 +239,26 @@ jobs:
 
 
           // ------------------------------------------------------------
-          // dhcp_stop()
+          // DHCP stop
           // ------------------------------------------------------------
-
-          static mp_obj_t network_wlan_dhcp_stop(
-              mp_obj_t self_in
-          ) {
+          // ap.dhcp_stop()
+          //
+          static mp_obj_t network_wlan_dhcp_stop(mp_obj_t self_in) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
-              esp_netif_t *ap =
-                  network_wlan_get_ap_netif();
+              esp_netif_t *netif =
+                  esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
 
-              esp_err_t err =
-                  esp_netif_dhcps_stop(ap);
-
-              if (err != ESP_OK &&
-                  err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
-
-                  esp_exceptions(err);
+              if (netif == NULL) {
+                  mp_raise_msg(
+                      &mp_type_RuntimeError,
+                      MP_ERROR_TEXT("AP netif not found")
+                  );
               }
+
+              esp_exceptions(
+                  esp_netif_dhcps_stop(netif)
+              );
 
               return mp_const_none;
           }
@@ -276,37 +270,44 @@ jobs:
 
 
           // ------------------------------------------------------------
-          // dhcp_restart()
-          //
-          // Reinicia SOLAMENTE DHCP.
-          // No apaga WiFi ni el SoftAP.
+          // DHCP restart
           // ------------------------------------------------------------
-
-          static mp_obj_t network_wlan_dhcp_restart(
-              mp_obj_t self_in
-          ) {
+          // ap.dhcp_restart()
+          //
+          static mp_obj_t network_wlan_dhcp_restart(mp_obj_t self_in) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
-              esp_netif_t *ap =
-                  network_wlan_get_ap_netif();
+              esp_netif_t *netif =
+                  esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
 
-              esp_err_t err;
-
-              err = esp_netif_dhcps_stop(ap);
-
-              if (err != ESP_OK &&
-                  err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
-
-                  esp_exceptions(err);
+              if (netif == NULL) {
+                  mp_raise_msg(
+                      &mp_type_RuntimeError,
+                      MP_ERROR_TEXT("AP netif not found")
+                  );
               }
 
-              err = esp_netif_dhcps_start(ap);
+              esp_netif_dhcp_status_t status;
 
-              if (err != ESP_OK &&
-                  err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
+              esp_err_t err =
+                  esp_netif_dhcps_get_status(
+                      netif,
+                      &status
+                  );
 
-                  esp_exceptions(err);
+              if (err != ESP_OK) {
+                  mp_raise_OSError(err);
               }
+
+              if (status == ESP_NETIF_DHCP_STARTED) {
+                  esp_exceptions(
+                      esp_netif_dhcps_stop(netif)
+                  );
+              }
+
+              esp_exceptions(
+                  esp_netif_dhcps_start(netif)
+              );
 
               return mp_const_none;
           }
@@ -318,16 +319,13 @@ jobs:
 
 
           // ------------------------------------------------------------
-          // dhcp_ip(mac)
-          //
-          // Busca primero en DHCP.
-          // Si no encuentra IP, intenta ARP.
-          //
-          // Devuelve:
-          // "192.168.4.2"
-          // o None.
+          // DHCP / ARP IP lookup by MAC
           // ------------------------------------------------------------
-
+          // ap.dhcp_ip(mac)
+          //
+          // Primero busca en la tabla DHCP.
+          // Si no aparece, intenta resolver mediante ARP.
+          //
           static mp_obj_t network_wlan_dhcp_ip(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -348,8 +346,15 @@ jobs:
                   );
               }
 
-              esp_netif_t *ap =
-                  network_wlan_get_ap_netif();
+              esp_netif_t *netif =
+                  esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+
+              if (netif == NULL) {
+                  mp_raise_msg(
+                      &mp_type_RuntimeError,
+                      MP_ERROR_TEXT("AP netif not found")
+                  );
+              }
 
               esp_netif_pair_mac_ip_t pair;
 
@@ -359,41 +364,48 @@ jobs:
                   sizeof(pair)
               );
 
-              memcpy(
-                  pair.mac,
-                  bufinfo.buf,
-                  6
-              );
+              esp_err_t err =
+                  esp_netif_dhcps_get_clients_by_mac(
+                      netif,
+                      1,
+                      &pair,
+                      (const uint8_t *)bufinfo.buf
+                  );
 
-              esp_err_t err;
+              if (err == ESP_OK &&
+                  pair.ip.addr != 0) {
 
-              err = esp_netif_dhcps_get_clients_by_mac(
-                  ap,
-                  1,
-                  &pair
-              );
-
-              if (err != ESP_OK &&
-                  err != ESP_ERR_NOT_SUPPORTED) {
-
-                  esp_exceptions(err);
-              }
-
-              if (pair.ip.addr == 0) {
-                  esp_netif_arp_get_client_by_mac(
-                      ap,
-                      &pair
+                  return netutils_format_ipv4_addr(
+                      (uint8_t *)&pair.ip,
+                      NETUTILS_BIG
                   );
               }
 
-              if (pair.ip.addr == 0) {
-                  return mp_const_none;
+              esp_ip4_addr_t ip;
+
+              memset(
+                  &ip,
+                  0,
+                  sizeof(ip)
+              );
+
+              err =
+                  esp_netif_arp_get_client_by_mac(
+                      netif,
+                      (const uint8_t *)bufinfo.buf,
+                      &ip
+                  );
+
+              if (err == ESP_OK &&
+                  ip.addr != 0) {
+
+                  return netutils_format_ipv4_addr(
+                      (uint8_t *)&ip,
+                      NETUTILS_BIG
+                  );
               }
 
-              return netutils_format_ipv4_addr(
-                  (uint8_t *)(&pair.ip),
-                  NETUTILS_BIG
-              );
+              return mp_const_none;
           }
 
           static MP_DEFINE_CONST_FUN_OBJ_2(
@@ -403,31 +415,24 @@ jobs:
 
 
           // ------------------------------------------------------------
-          // get_sta_list()
-          //
-          // Lista PURA de estaciones WiFi asociadas.
-          //
-          // No depende de DHCP.
+          // Raw associated station list
+          // ------------------------------------------------------------
+          // ap.get_sta_list()
           //
           // Devuelve:
           // [
           //   (MAC, RSSI),
           //   ...
           // ]
-          // ------------------------------------------------------------
-
+          //
+          // No depende de DHCP.
+          //
           static mp_obj_t network_wlan_get_sta_list(
               mp_obj_t self_in
           ) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
               wifi_sta_list_t station_list;
-
-              memset(
-                  &station_list,
-                  0,
-                  sizeof(station_list)
-              );
 
               esp_exceptions(
                   esp_wifi_ap_get_sta_list(
@@ -436,7 +441,10 @@ jobs:
               );
 
               mp_obj_t list =
-                  mp_obj_new_list(0, NULL);
+                  mp_obj_new_list(
+                      0,
+                      NULL
+                  );
 
               for (int i = 0;
                    i < station_list.num;
@@ -447,7 +455,7 @@ jobs:
                   tuple_items[0] =
                       mp_obj_new_bytes(
                           station_list.sta[i].mac,
-                          6
+                          sizeof(station_list.sta[i].mac)
                       );
 
                   tuple_items[1] =
@@ -474,12 +482,15 @@ jobs:
 
 
           // ------------------------------------------------------------
-          // get_aid(mac)
-          //
-          // Devuelve AID de una estación.
-          // Si no está asociada, ESP-IDF devuelve error.
+          // Get AID by MAC
           // ------------------------------------------------------------
-
+          // ap.get_aid(mac)
+          //
+          // Devuelve:
+          //   AID
+          // o:
+          //   None
+          //
           static mp_obj_t network_wlan_get_aid(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -508,15 +519,15 @@ jobs:
                       &aid
                   );
 
-              if (err == ESP_ERR_NOT_FOUND) {
+              if (err != ESP_OK ||
+                  aid == 0) {
+
                   return mp_const_none;
               }
 
-              if (err != ESP_OK) {
-                  esp_exceptions(err);
-              }
-
-              return MP_OBJ_NEW_SMALL_INT(aid);
+              return MP_OBJ_NEW_SMALL_INT(
+                  aid
+              );
           }
 
           static MP_DEFINE_CONST_FUN_OBJ_2(
@@ -526,16 +537,19 @@ jobs:
 
 
           // ------------------------------------------------------------
-          // get_sta_info(mac)
+          // Get station information
+          // ------------------------------------------------------------
+          // ap.get_sta_info(mac)
           //
           // Devuelve:
           // {
-          //   mac: bytes,
-          //   aid: int,
-          //   rssi: int
+          //     "mac": MAC,
+          //     "aid": AID,
+          //     "rssi": RSSI
           // }
-          // ------------------------------------------------------------
-
+          //
+          // o None si no está asociado.
+          //
           static mp_obj_t network_wlan_get_sta_info(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -558,19 +572,11 @@ jobs:
 
               wifi_sta_list_t station_list;
 
-              memset(
-                  &station_list,
-                  0,
-                  sizeof(station_list)
-              );
-
               esp_exceptions(
                   esp_wifi_ap_get_sta_list(
                       &station_list
                   )
               );
-
-              int found = -1;
 
               for (int i = 0;
                    i < station_list.num;
@@ -582,56 +588,54 @@ jobs:
                           6
                       ) == 0) {
 
-                      found = i;
-                      break;
+                      uint16_t aid = 0;
+
+                      esp_wifi_ap_get_sta_aid(
+                          station_list.sta[i].mac,
+                          &aid
+                      );
+
+                      mp_obj_t dict =
+                          mp_obj_new_dict(
+                              0
+                          );
+
+                      mp_obj_dict_store(
+                          dict,
+                          MP_OBJ_NEW_QSTR(
+                              MP_QSTR_mac
+                          ),
+                          mp_obj_new_bytes(
+                              station_list.sta[i].mac,
+                              6
+                          )
+                      );
+
+                      mp_obj_dict_store(
+                          dict,
+                          MP_OBJ_NEW_QSTR(
+                              MP_QSTR_aid
+                          ),
+                          MP_OBJ_NEW_SMALL_INT(
+                              aid
+                          )
+                      );
+
+                      mp_obj_dict_store(
+                          dict,
+                          MP_OBJ_NEW_QSTR(
+                              MP_QSTR_rssi
+                          ),
+                          MP_OBJ_NEW_SMALL_INT(
+                              station_list.sta[i].rssi
+                          )
+                      );
+
+                      return dict;
                   }
               }
 
-              if (found < 0) {
-                  return mp_const_none;
-              }
-
-              uint16_t aid = 0;
-
-              esp_err_t err =
-                  esp_wifi_ap_get_sta_aid(
-                      (const uint8_t *)bufinfo.buf,
-                      &aid
-                  );
-
-              if (err != ESP_OK &&
-                  err != ESP_ERR_NOT_FOUND) {
-
-                  esp_exceptions(err);
-              }
-
-              mp_obj_t dict =
-                  mp_obj_new_dict(3);
-
-              mp_obj_dict_store(
-                  dict,
-                  MP_OBJ_NEW_QSTR(MP_QSTR_mac),
-                  mp_obj_new_bytes(
-                      station_list.sta[found].mac,
-                      6
-                  )
-              );
-
-              mp_obj_dict_store(
-                  dict,
-                  MP_OBJ_NEW_QSTR(MP_QSTR_aid),
-                  MP_OBJ_NEW_SMALL_INT(aid)
-              );
-
-              mp_obj_dict_store(
-                  dict,
-                  MP_OBJ_NEW_QSTR(MP_QSTR_rssi),
-                  MP_OBJ_NEW_SMALL_INT(
-                      station_list.sta[found].rssi
-                  )
-              );
-
-              return dict;
+              return mp_const_none;
           }
 
           static MP_DEFINE_CONST_FUN_OBJ_2(
@@ -641,79 +645,80 @@ jobs:
 
 
           // ------------------------------------------------------------
-          // get_ap_info()
+          // Get connected AP information
+          // ------------------------------------------------------------
+          // ap.get_ap_info()
           //
-          // Para STA:
-          // devuelve información básica del AP conectado.
+          // Devuelve información del AP al que está conectada
+          // una STA.
           //
           // {
-          //   ssid,
-          //   bssid,
-          //   channel,
-          //   rssi
+          //     "ssid": ...,
+          //     "bssid": ...,
+          //     "channel": ...,
+          //     "rssi": ...
           // }
-          // ------------------------------------------------------------
-
+          //
           static mp_obj_t network_wlan_get_ap_info(
               mp_obj_t self_in
           ) {
               require_if(self_in, ESP_IF_WIFI_STA);
 
-              wifi_ap_record_t ap_info;
-
-              memset(
-                  &ap_info,
-                  0,
-                  sizeof(ap_info)
-              );
+              wifi_ap_record_t record;
 
               esp_exceptions(
                   esp_wifi_sta_get_ap_info(
-                      &ap_info
+                      &record
                   )
               );
 
               mp_obj_t dict =
-                  mp_obj_new_dict(4);
-
-              size_t ssid_len = 0;
-
-              while (ssid_len < sizeof(ap_info.ssid) &&
-                     ap_info.ssid[ssid_len] != 0) {
-                  ssid_len++;
-              }
+                  mp_obj_new_dict(
+                      0
+                  );
 
               mp_obj_dict_store(
                   dict,
-                  MP_OBJ_NEW_QSTR(MP_QSTR_ssid),
-                  mp_obj_new_str(
-                      (const char *)ap_info.ssid,
-                      ssid_len
-                  )
-              );
-
-              mp_obj_dict_store(
-                  dict,
-                  MP_OBJ_NEW_QSTR(MP_QSTR_bssid),
+                  MP_OBJ_NEW_QSTR(
+                      MP_QSTR_ssid
+                  ),
                   mp_obj_new_bytes(
-                      ap_info.bssid,
-                      6
+                      record.ssid,
+                      strnlen(
+                          (const char *)record.ssid,
+                          sizeof(record.ssid)
+                      )
                   )
               );
 
               mp_obj_dict_store(
                   dict,
-                  MP_OBJ_NEW_QSTR(MP_QSTR_channel),
-                  MP_OBJ_NEW_SMALL_INT(
-                      ap_info.primary
+                  MP_OBJ_NEW_QSTR(
+                      MP_QSTR_bssid
+                  ),
+                  mp_obj_new_bytes(
+                      record.bssid,
+                      sizeof(record.bssid)
                   )
               );
 
               mp_obj_dict_store(
                   dict,
-                  MP_OBJ_NEW_QSTR(MP_QSTR_rssi),
+                  MP_OBJ_NEW_QSTR(
+                      MP_QSTR_channel
+                  ),
                   MP_OBJ_NEW_SMALL_INT(
-                      ap_info.rssi
+                      record.primary
+                  )
+              );
+
+              mp_obj_dict_store(
+                  dict,
+                  MP_OBJ_NEW_QSTR(
+                      MP_QSTR_rssi
+                  ),
+                  MP_OBJ_NEW_SMALL_INT(
+                      record.rssi
                   )
               );
 
@@ -726,13 +731,11 @@ jobs:
           );
 
 
-          // ============================================================
-          // Funciones que ya tenías
-          // ============================================================
-
-
-          // Expulsa una estación usando su MAC.
-          // ap.deauth(b"\xAA\xBB\xCC\xDD\xEE\xFF")
+          // ------------------------------------------------------------
+          // Deauth by MAC
+          // ------------------------------------------------------------
+          // ap.deauth(mac)
+          //
           static mp_obj_t network_wlan_deauth(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -762,8 +765,14 @@ jobs:
                   )
               );
 
+              if (aid == 0) {
+                  return mp_const_none;
+              }
+
               esp_exceptions(
-                  esp_wifi_deauth_sta(aid)
+                  esp_wifi_deauth_sta(
+                      aid
+                  )
               );
 
               return mp_const_none;
@@ -775,7 +784,11 @@ jobs:
           );
 
 
-          // Expulsa una estación directamente usando su AID.
+          // ------------------------------------------------------------
+          // Deauth by AID
+          // ------------------------------------------------------------
+          // ap.deauth_aid(aid)
+          //
           static mp_obj_t network_wlan_deauth_aid(
               mp_obj_t self_in,
               mp_obj_t aid_in
@@ -783,7 +796,9 @@ jobs:
               require_if(self_in, ESP_IF_WIFI_AP);
 
               uint16_t aid =
-                  mp_obj_get_int(aid_in);
+                  mp_obj_get_int(
+                      aid_in
+                  );
 
               if (aid == 0) {
                   mp_raise_ValueError(
@@ -794,7 +809,9 @@ jobs:
               }
 
               esp_exceptions(
-                  esp_wifi_deauth_sta(aid)
+                  esp_wifi_deauth_sta(
+                      aid
+                  )
               );
 
               return mp_const_none;
@@ -806,14 +823,23 @@ jobs:
           );
 
 
-          // Expulsa TODAS las estaciones asociadas.
+          // ------------------------------------------------------------
+          // Deauth all
+          // ------------------------------------------------------------
+          // ap.deauth_all()
+          //
           static mp_obj_t network_wlan_deauth_all(
               mp_obj_t self_in
           ) {
-              require_if(self_in, ESP_IF_WIFI_AP);
+              require_if(
+                  self_in,
+                  ESP_IF_WIFI_AP
+              );
 
               esp_exceptions(
-                  esp_wifi_deauth_sta(0)
+                  esp_wifi_deauth_sta(
+                      0
+                  )
               );
 
               return mp_const_none;
@@ -825,15 +851,24 @@ jobs:
           );
 
 
-          // Cambia el tiempo de inactividad del SoftAP.
+          // ------------------------------------------------------------
+          // Set inactive time
+          // ------------------------------------------------------------
+          // ap.set_inactive_time(seconds)
+          //
           static mp_obj_t network_wlan_set_inactive_time(
               mp_obj_t self_in,
               mp_obj_t seconds_in
           ) {
-              require_if(self_in, ESP_IF_WIFI_AP);
+              require_if(
+                  self_in,
+                  ESP_IF_WIFI_AP
+              );
 
               uint16_t seconds =
-                  mp_obj_get_int(seconds_in);
+                  mp_obj_get_int(
+                      seconds_in
+                  );
 
               if (seconds < 10) {
                   mp_raise_ValueError(
@@ -859,11 +894,18 @@ jobs:
           );
 
 
-          // Obtiene el tiempo de inactividad configurado.
+          // ------------------------------------------------------------
+          // Get inactive time
+          // ------------------------------------------------------------
+          // ap.get_inactive_time()
+          //
           static mp_obj_t network_wlan_get_inactive_time(
               mp_obj_t self_in
           ) {
-              require_if(self_in, ESP_IF_WIFI_AP);
+              require_if(
+                  self_in,
+                  ESP_IF_WIFI_AP
+              );
 
               uint16_t seconds = 0;
 
@@ -874,7 +916,9 @@ jobs:
                   )
               );
 
-              return MP_OBJ_NEW_SMALL_INT(seconds);
+              return MP_OBJ_NEW_SMALL_INT(
+                  seconds
+              );
           }
 
           static MP_DEFINE_CONST_FUN_OBJ_1(
@@ -884,7 +928,7 @@ jobs:
 
           '''
 
-          # Insertar funciones antes de la tabla de métodos.
+          # Insertar las funciones justo antes de la tabla de métodos.
           marker = "static const mp_rom_map_elem_t wlan_if_locals_dict_table[] = {"
 
           if marker not in text:
@@ -904,7 +948,7 @@ jobs:
           )
 
           # ============================================================
-          # Registrar todos los métodos nuevos
+          # NUEVO: registrar los métodos en network.WLAN
           # ============================================================
 
           table_marker = (
@@ -973,6 +1017,7 @@ jobs:
 
           print("Parche C aplicado exitosamente.")
           print("Funciones nuevas:")
+          print("  - ap.stations()")
           print("  - ap.dhcp_status()")
           print("  - ap.dhcp_start()")
           print("  - ap.dhcp_stop()")
@@ -981,7 +1026,7 @@ jobs:
           print("  - ap.get_sta_list()")
           print("  - ap.get_aid(mac)")
           print("  - ap.get_sta_info(mac)")
-          print("  - sta.get_ap_info()")
+          print("  - ap.get_ap_info()")
           print("  - ap.deauth(mac)")
           print("  - ap.deauth_aid(aid)")
           print("  - ap.deauth_all()")
