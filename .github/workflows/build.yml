@@ -64,6 +64,16 @@ jobs:
           if '#include "esp_netif.h"' not in text:
               text = '#include "esp_netif.h"\n' + text
 
+          # ESP-NOW
+          if '#include "esp_now.h"' not in text:
+              text = '#include "esp_now.h"\n' + text
+
+          if '#include "freertos/FreeRTOS.h"' not in text:
+              text = '#include "freertos/FreeRTOS.h"\n' + text
+
+          if '#include "freertos/queue.h"' not in text:
+              text = '#include "freertos/queue.h"\n' + text
+
 
           # ============================================================
           # STATIONS
@@ -840,6 +850,660 @@ jobs:
               network_wlan_wifi_stats
           );
 
+
+          // ============================================================
+          // ESP-NOW
+          // ============================================================
+
+          // Receive queue.
+          //
+          // ESP-NOW callbacks run from the WiFi task.
+          // We only copy the packet into a FreeRTOS queue here.
+          // Python receives it later through espnow_recv().
+          //
+
+          #define NETWORK_WLAN_ESPNOW_RX_QUEUE_LEN 8
+
+          typedef struct {
+              uint8_t mac[ESP_NOW_ETH_ALEN];
+              uint16_t len;
+              uint8_t data[ESP_NOW_MAX_DATA_LEN];
+          } network_wlan_espnow_packet_t;
+
+          static QueueHandle_t network_wlan_espnow_rx_queue = NULL;
+          static bool network_wlan_espnow_initialized = false;
+
+
+          // ------------------------------------------------------------
+          // ESP-NOW receive callback
+          // ESP-IDF 5.x
+          // ------------------------------------------------------------
+
+          static void network_wlan_espnow_recv_cb(
+              const esp_now_recv_info_t *info,
+              const uint8_t *data,
+              int data_len
+          ) {
+              if (network_wlan_espnow_rx_queue == NULL) {
+                  return;
+              }
+
+              if (info == NULL ||
+                  info->src_addr == NULL ||
+                  data == NULL) {
+                  return;
+              }
+
+              if (data_len < 0 ||
+                  data_len > ESP_NOW_MAX_DATA_LEN) {
+                  return;
+              }
+
+              network_wlan_espnow_packet_t packet;
+
+              memcpy(
+                  packet.mac,
+                  info->src_addr,
+                  ESP_NOW_ETH_ALEN
+              );
+
+              packet.len =
+                  (uint16_t)data_len;
+
+              if (data_len > 0) {
+                  memcpy(
+                      packet.data,
+                      data,
+                      data_len
+                  );
+              }
+
+              // Never block inside the WiFi callback.
+              xQueueSend(
+                  network_wlan_espnow_rx_queue,
+                  &packet,
+                  0
+              );
+          }
+
+
+          // ============================================================
+          // 16. espnow_init()
+          //
+          // Initialize ESP-NOW.
+          // WiFi must already be active.
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_init(
+              mp_obj_t self_in
+          ) {
+              wlan_if_obj_t *self =
+                  MP_OBJ_TO_PTR(self_in);
+
+              if (network_wlan_espnow_initialized) {
+                  return mp_const_none;
+              }
+
+              if (self->if_id != WIFI_IF_STA &&
+                  self->if_id != WIFI_IF_AP) {
+
+                  mp_raise_ValueError(
+                      MP_ERROR_TEXT(
+                          "invalid WiFi interface"
+                      )
+                  );
+              }
+
+              network_wlan_espnow_rx_queue =
+                  xQueueCreate(
+                      NETWORK_WLAN_ESPNOW_RX_QUEUE_LEN,
+                      sizeof(network_wlan_espnow_packet_t)
+                  );
+
+              if (network_wlan_espnow_rx_queue == NULL) {
+                  mp_raise_msg(
+                      &mp_type_RuntimeError,
+                      MP_ERROR_TEXT(
+                          "ESP-NOW RX queue allocation failed"
+                      )
+                  );
+              }
+
+              esp_err_t err =
+                  esp_now_init();
+
+              if (err != ESP_OK) {
+                  vQueueDelete(
+                      network_wlan_espnow_rx_queue
+                  );
+
+                  network_wlan_espnow_rx_queue =
+                      NULL;
+
+                  esp_exceptions(err);
+              }
+
+              err =
+                  esp_now_register_recv_cb(
+                      network_wlan_espnow_recv_cb
+                  );
+
+              if (err != ESP_OK) {
+                  esp_now_deinit();
+
+                  vQueueDelete(
+                      network_wlan_espnow_rx_queue
+                  );
+
+                  network_wlan_espnow_rx_queue =
+                      NULL;
+
+                  esp_exceptions(err);
+              }
+
+              network_wlan_espnow_initialized =
+                  true;
+
+              return mp_const_none;
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_1(
+              network_wlan_espnow_init_obj,
+              network_wlan_espnow_init
+          );
+
+
+          // ============================================================
+          // 17. espnow_deinit()
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_deinit(
+              mp_obj_t self_in
+          ) {
+              if (!network_wlan_espnow_initialized) {
+                  return mp_const_none;
+              }
+
+              esp_now_unregister_recv_cb();
+
+              esp_exceptions(
+                  esp_now_deinit()
+              );
+
+              if (network_wlan_espnow_rx_queue != NULL) {
+                  vQueueDelete(
+                      network_wlan_espnow_rx_queue
+                  );
+
+                  network_wlan_espnow_rx_queue =
+                      NULL;
+              }
+
+              network_wlan_espnow_initialized =
+                  false;
+
+              return mp_const_none;
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_1(
+              network_wlan_espnow_deinit_obj,
+              network_wlan_espnow_deinit
+          );
+
+
+          // ============================================================
+          // 18. espnow_is_init()
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_is_init(
+              mp_obj_t self_in
+          ) {
+              return mp_obj_new_bool(
+                  network_wlan_espnow_initialized
+              );
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_1(
+              network_wlan_espnow_is_init_obj,
+              network_wlan_espnow_is_init
+          );
+
+
+          // ============================================================
+          // 19. espnow_mac()
+          //
+          // Return MAC of the selected WLAN interface.
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_mac(
+              mp_obj_t self_in
+          ) {
+              wlan_if_obj_t *self =
+                  MP_OBJ_TO_PTR(self_in);
+
+              uint8_t mac[ESP_NOW_ETH_ALEN];
+
+              esp_exceptions(
+                  esp_wifi_get_mac(
+                      self->if_id,
+                      mac
+                  )
+              );
+
+              return mp_obj_new_bytes(
+                  mac,
+                  ESP_NOW_ETH_ALEN
+              );
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_1(
+              network_wlan_espnow_mac_obj,
+              network_wlan_espnow_mac
+          );
+
+
+          // ============================================================
+          // 20. espnow_add_peer(mac, channel=0)
+          //
+          // channel=0 means use the current WiFi channel.
+          //
+          // Encryption is intentionally disabled for now.
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_add_peer(
+              size_t n_args,
+              const mp_obj_t *args
+          ) {
+              wlan_if_obj_t *self =
+                  MP_OBJ_TO_PTR(args[0]);
+
+              mp_buffer_info_t bufinfo;
+
+              network_wlan_check_mac(
+                  args[1],
+                  &bufinfo
+              );
+
+              uint8_t channel = 0;
+
+              if (n_args >= 3) {
+                  mp_int_t channel_int =
+                      mp_obj_get_int(args[2]);
+
+                  if (channel_int < 0 ||
+                      channel_int > 14) {
+
+                      mp_raise_ValueError(
+                          MP_ERROR_TEXT(
+                              "channel must be 0..14"
+                          )
+                      );
+                  }
+
+                  channel =
+                      (uint8_t)channel_int;
+              }
+
+              esp_now_peer_info_t peer;
+
+              memset(
+                  &peer,
+                  0,
+                  sizeof(peer)
+              );
+
+              memcpy(
+                  peer.peer_addr,
+                  bufinfo.buf,
+                  ESP_NOW_ETH_ALEN
+              );
+
+              peer.channel =
+                  channel;
+
+              peer.ifidx =
+                  self->if_id;
+
+              peer.encrypt =
+                  false;
+
+              esp_exceptions(
+                  esp_now_add_peer(
+                      &peer
+                  )
+              );
+
+              return mp_const_none;
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+              network_wlan_espnow_add_peer_obj,
+              2,
+              3,
+              network_wlan_espnow_add_peer
+          );
+
+
+          // ============================================================
+          // 21. espnow_del_peer(mac)
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_del_peer(
+              mp_obj_t self_in,
+              mp_obj_t mac_in
+          ) {
+              mp_buffer_info_t bufinfo;
+
+              network_wlan_check_mac(
+                  mac_in,
+                  &bufinfo
+              );
+
+              esp_exceptions(
+                  esp_now_del_peer(
+                      (const uint8_t *)bufinfo.buf
+                  )
+              );
+
+              return mp_const_none;
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_2(
+              network_wlan_espnow_del_peer_obj,
+              network_wlan_espnow_del_peer
+          );
+
+
+          // ============================================================
+          // 22. espnow_peer_exists(mac)
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_peer_exists(
+              mp_obj_t self_in,
+              mp_obj_t mac_in
+          ) {
+              mp_buffer_info_t bufinfo;
+
+              network_wlan_check_mac(
+                  mac_in,
+                  &bufinfo
+              );
+
+              return mp_obj_new_bool(
+                  esp_now_is_peer_exist(
+                      (const uint8_t *)bufinfo.buf
+                  )
+              );
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_2(
+              network_wlan_espnow_peer_exists_obj,
+              network_wlan_espnow_peer_exists
+          );
+
+
+          // ============================================================
+          // 23. espnow_peers()
+          //
+          // Return:
+          // [
+          //     b"MAC1",
+          //     b"MAC2",
+          //     ...
+          // ]
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_peers(
+              mp_obj_t self_in
+          ) {
+              mp_obj_t list =
+                  mp_obj_new_list(0, NULL);
+
+              esp_now_peer_info_t peer;
+
+              bool from_head = true;
+
+              while (true) {
+                  memset(
+                      &peer,
+                      0,
+                      sizeof(peer)
+                  );
+
+                  esp_err_t err =
+                      esp_now_fetch_peer(
+                          from_head,
+                          &peer
+                      );
+
+                  if (err != ESP_OK) {
+                      break;
+                  }
+
+                  mp_obj_list_append(
+                      list,
+                      mp_obj_new_bytes(
+                          peer.peer_addr,
+                          ESP_NOW_ETH_ALEN
+                      )
+                  );
+
+                  from_head = false;
+              }
+
+              return list;
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_1(
+              network_wlan_espnow_peers_obj,
+              network_wlan_espnow_peers
+          );
+
+
+          // ============================================================
+          // 24. espnow_send(mac, data)
+          //
+          // data can be:
+          //
+          //   str
+          //   bytes
+          //   bytearray
+          //
+          // For this firmware the intended use is str.
+          //
+          // Example:
+          //
+          // ap.espnow_send(
+          //     mac,
+          //     '{"cmd":"hello","value":123}'
+          // )
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_send(
+              mp_obj_t self_in,
+              mp_obj_t mac_in,
+              mp_obj_t data_in
+          ) {
+              mp_buffer_info_t mac_buf;
+
+              network_wlan_check_mac(
+                  mac_in,
+                  &mac_buf
+              );
+
+              const uint8_t *data;
+              size_t len;
+
+              if (mp_obj_is_str(data_in)) {
+
+                  data =
+                      (const uint8_t *)
+                      mp_obj_str_get_data(
+                          data_in,
+                          &len
+                      );
+
+              } else {
+
+                  mp_buffer_info_t data_buf;
+
+                  mp_get_buffer_raise(
+                      data_in,
+                      &data_buf,
+                      MP_BUFFER_READ
+                  );
+
+                  data =
+                      (const uint8_t *)
+                      data_buf.buf;
+
+                  len =
+                      data_buf.len;
+              }
+
+              if (len > ESP_NOW_MAX_DATA_LEN) {
+                  mp_raise_ValueError(
+                      MP_ERROR_TEXT(
+                          "ESP-NOW data maximum is 250 bytes"
+                      )
+                  );
+              }
+
+              esp_exceptions(
+                  esp_now_send(
+                      (const uint8_t *)mac_buf.buf,
+                      data,
+                      len
+                  )
+              );
+
+              return mp_const_none;
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_3(
+              network_wlan_espnow_send_obj,
+              network_wlan_espnow_send
+          );
+
+
+          // ============================================================
+          // 25. espnow_recv(timeout_ms=0)
+          //
+          // Return:
+          //
+          //   (MAC, STRING)
+          //
+          // or None when no packet is available.
+          //
+          // timeout_ms:
+          //
+          //   0  = non-blocking
+          //   >0 = wait this many milliseconds
+          //   <0 = wait forever
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_recv(
+              size_t n_args,
+              const mp_obj_t *args
+          ) {
+              if (!network_wlan_espnow_initialized ||
+                  network_wlan_espnow_rx_queue == NULL) {
+
+                  mp_raise_msg(
+                      &mp_type_RuntimeError,
+                      MP_ERROR_TEXT(
+                          "ESP-NOW is not initialized"
+                      )
+                  );
+              }
+
+              mp_int_t timeout_ms = 0;
+
+              if (n_args >= 2) {
+                  timeout_ms =
+                      mp_obj_get_int(
+                          args[1]
+                      );
+              }
+
+              network_wlan_espnow_packet_t packet;
+
+              TickType_t wait_ticks;
+
+              if (timeout_ms < 0) {
+                  wait_ticks =
+                      portMAX_DELAY;
+              } else {
+                  wait_ticks =
+                      pdMS_TO_TICKS(
+                          timeout_ms
+                      );
+              }
+
+              BaseType_t received =
+                  xQueueReceive(
+                      network_wlan_espnow_rx_queue,
+                      &packet,
+                      wait_ticks
+                  );
+
+              if (received != pdTRUE) {
+                  return mp_const_none;
+              }
+
+              mp_obj_t items[2];
+
+              items[0] =
+                  mp_obj_new_bytes(
+                      packet.mac,
+                      ESP_NOW_ETH_ALEN
+                  );
+
+              items[1] =
+                  mp_obj_new_str(
+                      (const char *)packet.data,
+                      packet.len
+                  );
+
+              return mp_obj_new_tuple(
+                  2,
+                  items
+              );
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(
+              network_wlan_espnow_recv_obj,
+              1,
+              2,
+              network_wlan_espnow_recv
+          );
+
+
+          // ============================================================
+          // 26. espnow_version()
+          // ============================================================
+
+          static mp_obj_t network_wlan_espnow_version(
+              mp_obj_t self_in
+          ) {
+              uint32_t version = 0;
+
+              esp_exceptions(
+                  esp_now_get_version(
+                      &version
+                  )
+              );
+
+              return mp_obj_new_int_from_uint(
+                  version
+              );
+          }
+
+          static MP_DEFINE_CONST_FUN_OBJ_1(
+              network_wlan_espnow_version_obj,
+              network_wlan_espnow_version
+          );
+
           '''
 
           # ============================================================
@@ -918,7 +1582,40 @@ jobs:
                 MP_ROM_PTR(&network_wlan_get_ap_info_obj) },
 
               { MP_ROM_QSTR(MP_QSTR_wifi_stats),
-                MP_ROM_PTR(&network_wlan_wifi_stats_obj) },'''
+                MP_ROM_PTR(&network_wlan_wifi_stats_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_init),
+                MP_ROM_PTR(&network_wlan_espnow_init_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_deinit),
+                MP_ROM_PTR(&network_wlan_espnow_deinit_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_is_init),
+                MP_ROM_PTR(&network_wlan_espnow_is_init_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_mac),
+                MP_ROM_PTR(&network_wlan_espnow_mac_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_add_peer),
+                MP_ROM_PTR(&network_wlan_espnow_add_peer_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_del_peer),
+                MP_ROM_PTR(&network_wlan_espnow_del_peer_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_peer_exists),
+                MP_ROM_PTR(&network_wlan_espnow_peer_exists_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_peers),
+                MP_ROM_PTR(&network_wlan_espnow_peers_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_send),
+                MP_ROM_PTR(&network_wlan_espnow_send_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_recv),
+                MP_ROM_PTR(&network_wlan_espnow_recv_obj) },
+
+              { MP_ROM_QSTR(MP_QSTR_espnow_version),
+                MP_ROM_PTR(&network_wlan_espnow_version_obj) },'''
 
           if table_marker not in text:
               raise SystemExit(
@@ -960,6 +1657,18 @@ jobs:
           print("  13. ap.set_inactive_time(seconds)")
           print("  14. ap.get_ap_info()")
           print("  15. ap.wifi_stats()")
+          print("")
+          print("  16. ap.espnow_init()")
+          print("  17. ap.espnow_deinit()")
+          print("  18. ap.espnow_is_init()")
+          print("  19. ap.espnow_mac()")
+          print("  20. ap.espnow_add_peer(mac, channel=0)")
+          print("  21. ap.espnow_del_peer(mac)")
+          print("  22. ap.espnow_peer_exists(mac)")
+          print("  23. ap.espnow_peers()")
+          print("  24. ap.espnow_send(mac, data)")
+          print("  25. ap.espnow_recv(timeout_ms=0)")
+          print("  26. ap.espnow_version()")
           print("==============================================")
           PY
 
