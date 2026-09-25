@@ -61,11 +61,7 @@ jobs:
           if '#include "esp_wifi_ap_get_sta_list.h"' not in text:
               text = '#include "esp_wifi_ap_get_sta_list.h"\n' + text
 
-          # Header oficial ESP-NETIF para:
-          # DHCP server
-          # DHCP client lookup
-          # ARP lookup
-          # esp_netif_pair_mac_ip_t
+          # Header oficial ESP-NETIF
           if '#include "esp_netif.h"' not in text:
               text = '#include "esp_netif.h"\n' + text
 
@@ -140,7 +136,7 @@ jobs:
           text = new_text
 
           # ============================================================
-          # NUEVO: funciones de control directo del SoftAP
+          # SoftAP station / DHCP control
           # ============================================================
 
           new_functions = r'''
@@ -148,17 +144,10 @@ jobs:
           // SoftAP station / DHCP control
           // ============================================================
 
-
           // ------------------------------------------------------------
           // DHCP status
           // ------------------------------------------------------------
-          // ap.dhcp_status()
-          //
-          // Devuelve:
-          //   "started"
-          //   "stopped"
-          //   "init"
-          //
+
           static mp_obj_t network_wlan_dhcp_status(mp_obj_t self_in) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
@@ -210,8 +199,7 @@ jobs:
           // ------------------------------------------------------------
           // DHCP start
           // ------------------------------------------------------------
-          // ap.dhcp_start()
-          //
+
           static mp_obj_t network_wlan_dhcp_start(mp_obj_t self_in) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
@@ -241,8 +229,7 @@ jobs:
           // ------------------------------------------------------------
           // DHCP stop
           // ------------------------------------------------------------
-          // ap.dhcp_stop()
-          //
+
           static mp_obj_t network_wlan_dhcp_stop(mp_obj_t self_in) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
@@ -272,8 +259,7 @@ jobs:
           // ------------------------------------------------------------
           // DHCP restart
           // ------------------------------------------------------------
-          // ap.dhcp_restart()
-          //
+
           static mp_obj_t network_wlan_dhcp_restart(mp_obj_t self_in) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
@@ -321,11 +307,7 @@ jobs:
           // ------------------------------------------------------------
           // DHCP / ARP IP lookup by MAC
           // ------------------------------------------------------------
-          // ap.dhcp_ip(mac)
-          //
-          // Primero busca en la tabla DHCP.
-          // Si no aparece, intenta resolver mediante ARP.
-          //
+
           static mp_obj_t network_wlan_dhcp_ip(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -417,16 +399,7 @@ jobs:
           // ------------------------------------------------------------
           // Raw associated station list
           // ------------------------------------------------------------
-          // ap.get_sta_list()
-          //
-          // Devuelve:
-          // [
-          //   (MAC, RSSI),
-          //   ...
-          // ]
-          //
-          // No depende de DHCP.
-          //
+
           static mp_obj_t network_wlan_get_sta_list(
               mp_obj_t self_in
           ) {
@@ -484,13 +457,7 @@ jobs:
           // ------------------------------------------------------------
           // Get AID by MAC
           // ------------------------------------------------------------
-          // ap.get_aid(mac)
-          //
-          // Devuelve:
-          //   AID
-          // o:
-          //   None
-          //
+
           static mp_obj_t network_wlan_get_aid(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -539,17 +506,7 @@ jobs:
           // ------------------------------------------------------------
           // Get station information
           // ------------------------------------------------------------
-          // ap.get_sta_info(mac)
-          //
-          // Devuelve:
-          // {
-          //     "mac": MAC,
-          //     "aid": AID,
-          //     "rssi": RSSI
-          // }
-          //
-          // o None si no está asociado.
-          //
+
           static mp_obj_t network_wlan_get_sta_info(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -647,18 +604,7 @@ jobs:
           // ------------------------------------------------------------
           // Get connected AP information
           // ------------------------------------------------------------
-          // ap.get_ap_info()
-          //
-          // Devuelve información del AP al que está conectada
-          // una STA.
-          //
-          // {
-          //     "ssid": ...,
-          //     "bssid": ...,
-          //     "channel": ...,
-          //     "rssi": ...
-          // }
-          //
+
           static mp_obj_t network_wlan_get_ap_info(
               mp_obj_t self_in
           ) {
@@ -734,8 +680,7 @@ jobs:
           // ------------------------------------------------------------
           // Deauth by MAC
           // ------------------------------------------------------------
-          // ap.deauth(mac)
-          //
+
           static mp_obj_t network_wlan_deauth(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -787,8 +732,7 @@ jobs:
           // ------------------------------------------------------------
           // Deauth by AID
           // ------------------------------------------------------------
-          // ap.deauth_aid(aid)
-          //
+
           static mp_obj_t network_wlan_deauth_aid(
               mp_obj_t self_in,
               mp_obj_t aid_in
@@ -826,8 +770,7 @@ jobs:
           // ------------------------------------------------------------
           // Deauth all
           // ------------------------------------------------------------
-          // ap.deauth_all()
-          //
+
           static mp_obj_t network_wlan_deauth_all(
               mp_obj_t self_in
           ) {
@@ -854,8 +797,7 @@ jobs:
           // ------------------------------------------------------------
           // Set inactive time
           // ------------------------------------------------------------
-          // ap.set_inactive_time(seconds)
-          //
+
           static mp_obj_t network_wlan_set_inactive_time(
               mp_obj_t self_in,
               mp_obj_t seconds_in
@@ -897,8 +839,7 @@ jobs:
           // ------------------------------------------------------------
           // Get inactive time
           // ------------------------------------------------------------
-          // ap.get_inactive_time()
-          //
+
           static mp_obj_t network_wlan_get_inactive_time(
               mp_obj_t self_in
           ) {
@@ -948,7 +889,7 @@ jobs:
           )
 
           # ============================================================
-          # NUEVO: registrar los métodos en network.WLAN
+          # Registrar los métodos en network.WLAN
           # ============================================================
 
           table_marker = (
@@ -1056,33 +997,34 @@ jobs:
       - name: Crear imagen binaria unificada (0x0) y empaquetar
         if: success()
         run: |
-          BUILD_DIR="lib/micropython/ports/esp32/build-ESP32_GENERIC"
-
           mkdir -p final_firmware
 
-          BOOTLOADER="$BUILD_DIR/bootloader/bootloader.bin"
-          PARTITION="$BUILD_DIR/partition_table/partition-table.bin"
-          APP="$BUILD_DIR/micropython.bin"
+          echo "=========================================="
+          echo "Buscando firmware generado por LVGL MicroPython"
+          echo "=========================================="
 
-          if [ ! -f "$APP" ]; then
-            APP="$BUILD_DIR/firmware.bin"
+          FIRMWARE=$(find . -maxdepth 3 -type f \
+            -name 'lvgl_micropy_ESP32_GENERIC-4.bin' \
+            -print -quit)
+
+          if [ -z "$FIRMWARE" ]; then
+            echo "ERROR: No se encontró lvgl_micropy_ESP32_GENERIC-4.bin"
+            echo
+            echo "Binarios encontrados:"
+            find . -type f -name "*.bin" -print | sort
+            exit 1
           fi
 
-          # Copiar archivos individuales
-          cp "$BOOTLOADER" final_firmware/bootloader.bin
-          cp "$PARTITION" final_firmware/partition-table.bin
-          cp "$APP" final_firmware/app_micropython.bin
+          echo "Firmware encontrado:"
+          echo "$FIRMWARE"
 
-          # Unificar los 3 archivos en un único binario completo listo para grabar en 0x0
-          python3 -m esptool --chip esp32 merge_bin \
-            -o final_firmware/firmware_merged_0x0.bin \
-            --flash_mode dio \
-            --flash_freq 40m \
-            --flash_size 4MB \
-            0x1000 "$BOOTLOADER" \
-            0x8000 "$PARTITION" \
-            0x10000 "$APP"
+          cp "$FIRMWARE" \
+            final_firmware/firmware_merged_0x0.bin
 
+          cp "$FIRMWARE" \
+            final_firmware/lvgl_micropy_ESP32_GENERIC-4.bin
+
+          echo
           echo "Archivos listos en final_firmware:"
           ls -lh final_firmware/
 
