@@ -51,7 +51,10 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          # Headers
+          # ============================================================
+          # HEADERS
+          # ============================================================
+
           if '#include "shared/netutils/netutils.h"' not in text:
               text = '#include "shared/netutils/netutils.h"\n' + text
 
@@ -61,11 +64,13 @@ jobs:
           if '#include "esp_netif.h"' not in text:
               text = '#include "esp_netif.h"\n' + text
 
+
           # ============================================================
-          # stations
+          # STATIONS
           # ============================================================
 
           patch_code = """        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_stations): {
+                      // Return list of connected stations with MAC + IPv4.
                       require_if(args[0], ESP_IF_WIFI_AP);
 
                       wifi_sta_list_t station_list;
@@ -133,41 +138,80 @@ jobs:
 
           text = new_text
 
+
           # ============================================================
-          # NUEVAS FUNCIONES
+          # FUNCIONES NUEVAS
           # ============================================================
 
           new_functions = r'''
+
           // ============================================================
-          // SoftAP station / DHCP / WiFi control
+          // SoftAP / WiFi advanced control
+          // ESP-IDF 5.x compatible
           // ============================================================
 
-          // 1. dhcp_status()
-          static mp_obj_t network_wlan_dhcp_status(
-              mp_obj_t self_in
-          ) {
-              require_if(self_in, ESP_IF_WIFI_AP);
 
-              esp_netif_t *ap =
+          // ------------------------------------------------------------
+          // Helpers
+          // ------------------------------------------------------------
+
+          static esp_netif_t *network_wlan_get_ap_netif(void) {
+              esp_netif_t *netif =
                   esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
 
-              if (ap == NULL) {
+              if (netif == NULL) {
                   mp_raise_msg(
                       &mp_type_RuntimeError,
                       MP_ERROR_TEXT("AP netif not available")
                   );
               }
 
+              return netif;
+          }
+
+
+          static void network_wlan_check_mac(
+              mp_obj_t mac_in,
+              mp_buffer_info_t *bufinfo
+          ) {
+              mp_get_buffer_raise(
+                  mac_in,
+                  bufinfo,
+                  MP_BUFFER_READ
+              );
+
+              if (bufinfo->len != 6) {
+                  mp_raise_ValueError(
+                      MP_ERROR_TEXT("MAC must be 6 bytes")
+                  );
+              }
+          }
+
+
+          // ============================================================
+          // 1. dhcp_status()
+          // ============================================================
+
+          static mp_obj_t network_wlan_dhcp_status(
+              mp_obj_t self_in
+          ) {
+              require_if(self_in, ESP_IF_WIFI_AP);
+
+              esp_netif_t *netif =
+                  network_wlan_get_ap_netif();
+
               esp_netif_dhcp_status_t status;
 
               esp_exceptions(
                   esp_netif_dhcps_get_status(
-                      ap,
+                      netif,
                       &status
                   )
               );
 
-              return MP_OBJ_NEW_SMALL_INT(status);
+              return MP_OBJ_NEW_SMALL_INT(
+                  status
+              );
           }
 
           static MP_DEFINE_CONST_FUN_OBJ_1(
@@ -176,39 +220,35 @@ jobs:
           );
 
 
+          // ============================================================
           // 2. dhcp_restart()
+          // ============================================================
+
           static mp_obj_t network_wlan_dhcp_restart(
               mp_obj_t self_in
           ) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
-              esp_netif_t *ap =
-                  esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-
-              if (ap == NULL) {
-                  mp_raise_msg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT("AP netif not available")
-                  );
-              }
+              esp_netif_t *netif =
+                  network_wlan_get_ap_netif();
 
               esp_netif_dhcp_status_t status;
 
               esp_exceptions(
                   esp_netif_dhcps_get_status(
-                      ap,
+                      netif,
                       &status
                   )
               );
 
               if (status == ESP_NETIF_DHCP_STARTED) {
                   esp_exceptions(
-                      esp_netif_dhcps_stop(ap)
+                      esp_netif_dhcps_stop(netif)
                   );
               }
 
               esp_exceptions(
-                  esp_netif_dhcps_start(ap)
+                  esp_netif_dhcps_start(netif)
               );
 
               return mp_const_none;
@@ -220,36 +260,21 @@ jobs:
           );
 
 
+          // ============================================================
           // 3. dhcp_start()
+          // ============================================================
+
           static mp_obj_t network_wlan_dhcp_start(
               mp_obj_t self_in
           ) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
-              esp_netif_t *ap =
-                  esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-
-              if (ap == NULL) {
-                  mp_raise_msg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT("AP netif not available")
-                  );
-              }
-
-              esp_netif_dhcp_status_t status;
+              esp_netif_t *netif =
+                  network_wlan_get_ap_netif();
 
               esp_exceptions(
-                  esp_netif_dhcps_get_status(
-                      ap,
-                      &status
-                  )
+                  esp_netif_dhcps_start(netif)
               );
-
-              if (status != ESP_NETIF_DHCP_STARTED) {
-                  esp_exceptions(
-                      esp_netif_dhcps_start(ap)
-                  );
-              }
 
               return mp_const_none;
           }
@@ -260,36 +285,21 @@ jobs:
           );
 
 
+          // ============================================================
           // 4. dhcp_stop()
+          // ============================================================
+
           static mp_obj_t network_wlan_dhcp_stop(
               mp_obj_t self_in
           ) {
               require_if(self_in, ESP_IF_WIFI_AP);
 
-              esp_netif_t *ap =
-                  esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-
-              if (ap == NULL) {
-                  mp_raise_msg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT("AP netif not available")
-                  );
-              }
-
-              esp_netif_dhcp_status_t status;
+              esp_netif_t *netif =
+                  network_wlan_get_ap_netif();
 
               esp_exceptions(
-                  esp_netif_dhcps_get_status(
-                      ap,
-                      &status
-                  )
+                  esp_netif_dhcps_stop(netif)
               );
-
-              if (status == ESP_NETIF_DHCP_STARTED) {
-                  esp_exceptions(
-                      esp_netif_dhcps_stop(ap)
-                  );
-              }
 
               return mp_const_none;
           }
@@ -300,7 +310,16 @@ jobs:
           );
 
 
+          // ============================================================
           // 5. get_sta_list()
+          //
+          // Return:
+          // [
+          //   b"MAC",
+          //   ...
+          // ]
+          // ============================================================
+
           static mp_obj_t network_wlan_get_sta_list(
               mp_obj_t self_in
           ) {
@@ -317,7 +336,10 @@ jobs:
               mp_obj_t list =
                   mp_obj_new_list(0, NULL);
 
-              for (int i = 0; i < station_list.num; ++i) {
+              for (int i = 0;
+                   i < station_list.num;
+                   ++i) {
+
                   mp_obj_list_append(
                       list,
                       mp_obj_new_bytes(
@@ -336,7 +358,13 @@ jobs:
           );
 
 
+          // ============================================================
           // 6. get_aid(mac)
+          //
+          // Return:
+          // AID integer
+          // ============================================================
+
           static mp_obj_t network_wlan_get_aid(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -345,17 +373,10 @@ jobs:
 
               mp_buffer_info_t bufinfo;
 
-              mp_get_buffer_raise(
+              network_wlan_check_mac(
                   mac_in,
-                  &bufinfo,
-                  MP_BUFFER_READ
+                  &bufinfo
               );
-
-              if (bufinfo.len != 6) {
-                  mp_raise_ValueError(
-                      MP_ERROR_TEXT("MAC must be 6 bytes")
-                  );
-              }
 
               uint16_t aid = 0;
 
@@ -366,7 +387,9 @@ jobs:
                   )
               );
 
-              return MP_OBJ_NEW_SMALL_INT(aid);
+              return MP_OBJ_NEW_SMALL_INT(
+                  aid
+              );
           }
 
           static MP_DEFINE_CONST_FUN_OBJ_2(
@@ -375,7 +398,21 @@ jobs:
           );
 
 
+          // ============================================================
           // 7. get_sta_info(mac)
+          //
+          // Return:
+          // (
+          //   MAC,
+          //   RSSI,
+          //   AID,
+          //   phy_11b,
+          //   phy_11g,
+          //   phy_11n,
+          //   phy_lr
+          // )
+          // ============================================================
+
           static mp_obj_t network_wlan_get_sta_info(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -384,17 +421,10 @@ jobs:
 
               mp_buffer_info_t bufinfo;
 
-              mp_get_buffer_raise(
+              network_wlan_check_mac(
                   mac_in,
-                  &bufinfo,
-                  MP_BUFFER_READ
+                  &bufinfo
               );
-
-              if (bufinfo.len != 6) {
-                  mp_raise_ValueError(
-                      MP_ERROR_TEXT("MAC must be 6 bytes")
-                  );
-              }
 
               wifi_sta_list_t station_list;
 
@@ -404,7 +434,10 @@ jobs:
                   )
               );
 
-              for (int i = 0; i < station_list.num; ++i) {
+              for (int i = 0;
+                   i < station_list.num;
+                   ++i) {
+
                   wifi_sta_info_t *sta =
                       &station_list.sta[i];
 
@@ -413,6 +446,15 @@ jobs:
                           bufinfo.buf,
                           6
                       ) == 0) {
+
+                      uint16_t aid = 0;
+
+                      esp_exceptions(
+                          esp_wifi_ap_get_sta_aid(
+                              sta->mac,
+                              &aid
+                          )
+                      );
 
                       mp_obj_t items[7];
 
@@ -429,7 +471,7 @@ jobs:
 
                       items[2] =
                           MP_OBJ_NEW_SMALL_INT(
-                              sta->aid
+                              aid
                           );
 
                       items[3] =
@@ -468,7 +510,15 @@ jobs:
           );
 
 
+          // ============================================================
           // 8. dhcp_ip(mac)
+          //
+          // Return:
+          // "192.168.4.X"
+          //
+          // None if DHCP has no IP for that MAC.
+          // ============================================================
+
           static mp_obj_t network_wlan_dhcp_ip(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -477,29 +527,13 @@ jobs:
 
               mp_buffer_info_t bufinfo;
 
-              mp_get_buffer_raise(
+              network_wlan_check_mac(
                   mac_in,
-                  &bufinfo,
-                  MP_BUFFER_READ
+                  &bufinfo
               );
 
-              if (bufinfo.len != 6) {
-                  mp_raise_ValueError(
-                      MP_ERROR_TEXT("MAC must be 6 bytes")
-                  );
-              }
-
-              esp_netif_t *ap =
-                  esp_netif_get_handle_from_ifkey(
-                      "WIFI_AP_DEF"
-                  );
-
-              if (ap == NULL) {
-                  mp_raise_msg(
-                      &mp_type_RuntimeError,
-                      MP_ERROR_TEXT("AP netif not available")
-                  );
-              }
+              esp_netif_t *netif =
+                  network_wlan_get_ap_netif();
 
               esp_netif_pair_mac_ip_t pair;
 
@@ -517,16 +551,14 @@ jobs:
 
               esp_err_t err =
                   esp_netif_dhcps_get_clients_by_mac(
-                      ap,
+                      netif,
                       1,
                       &pair
                   );
 
-              if (err == ESP_ERR_NOT_FOUND) {
+              if (err != ESP_OK) {
                   return mp_const_none;
               }
-
-              esp_exceptions(err);
 
               if (pair.ip.addr == 0) {
                   return mp_const_none;
@@ -544,7 +576,10 @@ jobs:
           );
 
 
+          // ============================================================
           // 9. deauth(mac)
+          // ============================================================
+
           static mp_obj_t network_wlan_deauth(
               mp_obj_t self_in,
               mp_obj_t mac_in
@@ -553,17 +588,10 @@ jobs:
 
               mp_buffer_info_t bufinfo;
 
-              mp_get_buffer_raise(
+              network_wlan_check_mac(
                   mac_in,
-                  &bufinfo,
-                  MP_BUFFER_READ
+                  &bufinfo
               );
-
-              if (bufinfo.len != 6) {
-                  mp_raise_ValueError(
-                      MP_ERROR_TEXT("MAC must be 6 bytes")
-                  );
-              }
 
               uint16_t aid = 0;
 
@@ -574,12 +602,10 @@ jobs:
                   )
               );
 
-              if (aid == 0) {
-                  return mp_const_none;
-              }
-
               esp_exceptions(
-                  esp_wifi_deauth_sta(aid)
+                  esp_wifi_deauth_sta(
+                      aid
+                  )
               );
 
               return mp_const_none;
@@ -591,7 +617,10 @@ jobs:
           );
 
 
+          // ============================================================
           // 10. deauth_aid(aid)
+          // ============================================================
+
           static mp_obj_t network_wlan_deauth_aid(
               mp_obj_t self_in,
               mp_obj_t aid_in
@@ -610,7 +639,9 @@ jobs:
               }
 
               esp_exceptions(
-                  esp_wifi_deauth_sta(aid)
+                  esp_wifi_deauth_sta(
+                      aid
+                  )
               );
 
               return mp_const_none;
@@ -622,7 +653,10 @@ jobs:
           );
 
 
+          // ============================================================
           // 11. deauth_all()
+          // ============================================================
+
           static mp_obj_t network_wlan_deauth_all(
               mp_obj_t self_in
           ) {
@@ -641,7 +675,10 @@ jobs:
           );
 
 
+          // ============================================================
           // 12. get_inactive_time()
+          // ============================================================
+
           static mp_obj_t network_wlan_get_inactive_time(
               mp_obj_t self_in
           ) {
@@ -667,7 +704,10 @@ jobs:
           );
 
 
+          // ============================================================
           // 13. set_inactive_time(seconds)
+          // ============================================================
+
           static mp_obj_t network_wlan_set_inactive_time(
               mp_obj_t self_in,
               mp_obj_t seconds_in
@@ -680,7 +720,7 @@ jobs:
               if (seconds < 10) {
                   mp_raise_ValueError(
                       MP_ERROR_TEXT(
-                          "minimum inactive time is 10 seconds"
+                          "AP inactive time minimum is 10 seconds"
                       )
                   );
               }
@@ -701,75 +741,70 @@ jobs:
           );
 
 
+          // ============================================================
           // 14. get_ap_info()
+          //
+          // Return:
+          // (
+          //   SSID,
+          //   password,
+          //   channel,
+          //   max_connections,
+          //   authmode
+          // )
+          // ============================================================
+
           static mp_obj_t network_wlan_get_ap_info(
               mp_obj_t self_in
           ) {
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_STA
-              );
+              require_if(self_in, ESP_IF_WIFI_AP);
 
-              wifi_ap_record_t ap_info;
+              wifi_config_t config;
 
               memset(
-                  &ap_info,
+                  &config,
                   0,
-                  sizeof(ap_info)
+                  sizeof(config)
               );
 
               esp_exceptions(
-                  esp_wifi_sta_get_ap_info(
-                      &ap_info
+                  esp_wifi_get_config(
+                      WIFI_IF_AP,
+                      &config
                   )
               );
 
-              mp_obj_t items[6];
+              mp_obj_t items[5];
 
               items[0] =
-                  mp_obj_new_str(
-                      (const char *)ap_info.ssid,
-                      strlen(
-                          (const char *)ap_info.ssid
-                      )
+                  mp_obj_new_bytes(
+                      config.ap.ssid,
+                      strlen((char *)config.ap.ssid)
                   );
 
               items[1] =
                   mp_obj_new_bytes(
-                      ap_info.bssid,
-                      6
+                      config.ap.password,
+                      strlen((char *)config.ap.password)
                   );
 
               items[2] =
                   MP_OBJ_NEW_SMALL_INT(
-                      ap_info.primary
+                      config.ap.channel
                   );
 
               items[3] =
                   MP_OBJ_NEW_SMALL_INT(
-                      ap_info.rssi
+                      config.ap.max_connection
                   );
 
               items[4] =
                   MP_OBJ_NEW_SMALL_INT(
-                      ap_info.authmode
-                  );
-
-              uint16_t aid = 0;
-
-              esp_exceptions(
-                  esp_wifi_sta_get_aid(
-                      &aid
-                  )
-              );
-
-              items[5] =
-                  MP_OBJ_NEW_SMALL_INT(
-                      aid
+                      config.ap.authmode
                   );
 
               return mp_obj_new_tuple(
-                  6,
+                  5,
                   items
               );
           }
@@ -780,98 +815,24 @@ jobs:
           );
 
 
+          // ============================================================
           // 15. wifi_stats()
+          //
+          // Dumps WiFi driver statistics to the ESP console.
+          // ============================================================
+
           static mp_obj_t network_wlan_wifi_stats(
               mp_obj_t self_in
           ) {
-              require_if(
-                  self_in,
-                  ESP_IF_WIFI_AP
-              );
-
-              wifi_mode_t mode;
+              require_if(self_in, ESP_IF_WIFI_AP);
 
               esp_exceptions(
-                  esp_wifi_get_mode(
-                      &mode
+                  esp_wifi_statis_dump(
+                      0xFFFFFFFF
                   )
               );
 
-              uint8_t primary_channel = 0;
-              wifi_second_chan_t second_channel =
-                  WIFI_SECOND_CHAN_NONE;
-
-              esp_exceptions(
-                  esp_wifi_get_channel(
-                      &primary_channel,
-                      &second_channel
-                  )
-              );
-
-              wifi_sta_list_t station_list;
-
-              esp_exceptions(
-                  esp_wifi_ap_get_sta_list(
-                      &station_list
-                  )
-              );
-
-              uint16_t inactive_time = 0;
-
-              esp_exceptions(
-                  esp_wifi_get_inactive_time(
-                      WIFI_IF_AP,
-                      &inactive_time
-                  )
-              );
-
-              esp_netif_t *ap =
-                  esp_netif_get_handle_from_ifkey(
-                      "WIFI_AP_DEF"
-                  );
-
-              int dhcp_status = -1;
-
-              if (ap != NULL) {
-                  esp_netif_dhcp_status_t status;
-
-                  if (esp_netif_dhcps_get_status(
-                          ap,
-                          &status
-                      ) == ESP_OK) {
-                      dhcp_status = status;
-                  }
-              }
-
-              mp_obj_t items[5];
-
-              items[0] =
-                  MP_OBJ_NEW_SMALL_INT(mode);
-
-              items[1] =
-                  MP_OBJ_NEW_SMALL_INT(
-                      primary_channel
-                  );
-
-              items[2] =
-                  MP_OBJ_NEW_SMALL_INT(
-                      station_list.num
-                  );
-
-              items[3] =
-                  MP_OBJ_NEW_SMALL_INT(
-                      dhcp_status
-                  );
-
-              items[4] =
-                  MP_OBJ_NEW_SMALL_INT(
-                      inactive_time
-                  );
-
-              return mp_obj_new_tuple(
-                  5,
-                  items
-              );
+              return mp_const_none;
           }
 
           static MP_DEFINE_CONST_FUN_OBJ_1(
@@ -881,7 +842,10 @@ jobs:
 
           '''
 
-          # Insertar funciones antes de la tabla de métodos.
+          # ============================================================
+          # INSERTAR FUNCIONES
+          # ============================================================
+
           marker = "static const mp_rom_map_elem_t wlan_if_locals_dict_table[] = {"
 
           if marker not in text:
@@ -889,7 +853,7 @@ jobs:
                   "ERROR: No se encontró wlan_if_locals_dict_table."
               )
 
-          if "network_wlan_deauth_obj" in text:
+          if "network_wlan_dhcp_status_obj" in text:
               raise SystemExit(
                   "ERROR: Las funciones nuevas ya existen en network_wlan.c."
               )
@@ -900,8 +864,9 @@ jobs:
               1
           )
 
+
           # ============================================================
-          # Registrar las 15 funciones
+          # REGISTRAR FUNCIONES EN network.WLAN
           # ============================================================
 
           table_marker = (
@@ -966,13 +931,36 @@ jobs:
               1
           )
 
+
+          # ============================================================
+          # GUARDAR
+          # ============================================================
+
           path.write_text(
               text,
               encoding="utf-8"
           )
 
+          print("==============================================")
           print("Parche C aplicado exitosamente.")
-          print("15 funciones nuevas registradas.")
+          print("Funciones agregadas:")
+          print("")
+          print("  1.  ap.dhcp_status()")
+          print("  2.  ap.dhcp_restart()")
+          print("  3.  ap.dhcp_start()")
+          print("  4.  ap.dhcp_stop()")
+          print("  5.  ap.get_sta_list()")
+          print("  6.  ap.get_aid(mac)")
+          print("  7.  ap.get_sta_info(mac)")
+          print("  8.  ap.dhcp_ip(mac)")
+          print("  9.  ap.deauth(mac)")
+          print("  10. ap.deauth_aid(aid)")
+          print("  11. ap.deauth_all()")
+          print("  12. ap.get_inactive_time()")
+          print("  13. ap.set_inactive_time(seconds)")
+          print("  14. ap.get_ap_info()")
+          print("  15. ap.wifi_stats()")
+          print("==============================================")
           PY
 
           python3 patch.py
@@ -1012,6 +1000,7 @@ jobs:
 
           cp "$FIRMWARE" final_firmware/firmware_merged_0x0.bin
 
+          # También conservar el nombre original generado por el builder.
           cp "$FIRMWARE" final_firmware/lvgl_micropy_ESP32_GENERIC-4.bin
 
           echo "Firmware encontrado:"
