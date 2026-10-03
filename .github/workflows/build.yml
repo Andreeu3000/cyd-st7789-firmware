@@ -979,7 +979,8 @@ jobs:
             --flash-size=4 \
             --optimize-size \
             --ccache \
-            LV_CFLAGS="-DLV_USE_IMAGE=1" \
+            L
+            LV_CFLAGS="-DLV_USE_IMAGE=1 -DLV_BIN_DECODER_RAM_LOAD=0"\
             2>&1 | tee build.log
 
       - name: Empaquetar firmware generado por LVGL MicroPython
