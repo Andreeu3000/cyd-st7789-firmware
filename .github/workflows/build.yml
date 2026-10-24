@@ -1,178 +1,63 @@
-
-name: Build CYD LVGL MicroPython
+name: Inspeccionar config LVGL MicroPython (solo lectura)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  inspect:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Instalar dependencias
+      - name: Clonar lvgl_micropython con submodulos
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            ninja-build \
-            python3 \
-            python3-venv \
-            python3-pip \
-            libusb-1.0-0-dev \
-            git \
-            ccache
+          git clone --recursive https://github.com/lvgl-micropython/lvgl_micropython.git fw
 
-      - name: Descargar LVGL MicroPython
-        run: |
-          git clone \
-            https://github.com/lvgl-micropython/lvgl_micropython.git \
-            firmware
-
-      - name: Descargar dependencias de MicroPython
-        working-directory: firmware
-        run: |
-          python3 - <<'PY'
-          import builder
-          builder.get_micropython()
-          print("MicroPython descargado correctamente.")
-          PY
-
-          test -f lib/micropython/ports/esp32/mpconfigport.h
-
-          echo "Configuración del heap encontrada:"
-          grep -n "MICROPY_GC_SPLIT_HEAP" \
-            lib/micropython/ports/esp32/mpconfigport.h || true
-
-      - name: Ajustar el heap de Python
-        working-directory: firmware
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path(
-              "lib/micropython/ports/esp32/mpconfigport.h"
-          )
-
-          text = path.read_text(encoding="utf-8")
-
-          if "cyd_mp_gc_alloc_heap" in text:
-              print("El ajuste ya está aplicado.")
-              raise SystemExit(0)
-
-          marker = re.compile(
-              r"^[ \t]*#define[ \t]+"
-              r"MICROPY_GC_SPLIT_HEAP_AUTO\b.*$",
-              re.MULTILINE,
-          )
-
-          match = marker.search(text)
-
-          if not match:
-              print("No se encontró la definición esperada.")
-              print("Definiciones de heap encontradas:")
-              for line in text.splitlines():
-                  if "MICROPY_GC_" in line or "MP_PLAT_ALLOC_HEAP" in line:
-                      print(line)
-              raise SystemExit(
-                  "No se aplicó el parche: revisa la versión descargada."
-              )
-
-          patch = r'''
-          /*
-           * CYD: limita el crecimiento automatico del heap
-           * de Python para conservar memoria interna.
-           */
-          #include <stdlib.h>
-          #include "esp_heap_caps.h"
-
-          #ifndef MP_PLAT_ALLOC_HEAP
-          static inline void *cyd_mp_gc_alloc_heap(size_t size) {
-              const size_t reserve = 32 * 1024;
-              const uint32_t caps =
-                  MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-
-              size_t free_now =
-                  heap_caps_get_free_size(caps);
-
-              size_t largest =
-                  heap_caps_get_largest_free_block(caps);
-
-              if (largest < size ||
-                  free_now < size + reserve) {
-                  return NULL;
-              }
-
-              return malloc(size);
-          }
-
-          #define MP_PLAT_ALLOC_HEAP(size) \
-              cyd_mp_gc_alloc_heap(size)
-          #endif
-
-          '''
-
-          text = (
-              text[:match.start()]
-              + patch
-              + text[match.start():]
-          )
-
-          path.write_text(text, encoding="utf-8")
-
-          print("Parche de heap aplicado.")
-          print("Reserva objetivo: 32 KiB.")
-          PY
-
-      - name: Crear particiones de 4 MB
-        working-directory: firmware
-        run: |
-          cat > partitions-4mb-custom.csv <<'EOF'
-          # Name,     Type, SubType, Offset,   Size, Flags
-          nvs,        data, nvs,     0x9000,   0x5000,
-          phy_init,   data, phy,     0xe000,   0x1000,
-          factory,    app,  factory, 0x10000,  0x330000,
-          EOF
-
-      - name: Compilar firmware
-        working-directory: firmware
+      - name: Recolectar datos
+        working-directory: fw
         shell: bash
         run: |
-          set -o pipefail
+          P=lib/micropython/ports/esp32
+          B=$P/boards
+          show() {
+            echo; echo "######## $1 ########"
+            if [ -f "$1" ]; then cat "$1"; else echo "(no existe)"; fi
+          }
+          {
+            echo "lvgl_micropython: $(git rev-parse --short HEAD)"
+            echo "micropython: $(git -C lib/micropython describe --tags --always 2>&1)"
 
-          python3 make.py esp32 \
-            BOARD=ESP32_GENERIC \
-            BOARD_VARIANT= \
-            PART_CSV=partitions-4mb-custom.csv \
-            DISPLAY=st7789 \
-            INDEV=xpt2046 \
-            --flash-size=4 \
-            --optimize-size \
-            --ccache \
-            LV_CFLAGS="-DLV_USE_IMAGE=1" \
-            2>&1 | tee build.log
+            echo; echo "######## ls $B/ESP32_GENERIC ########"
+            ls -la $B/ESP32_GENERIC 2>&1
 
-      - name: Mostrar firmware generado
-        if: always()
-        working-directory: firmware
-        run: |
-          find build -type f -name "*.bin" -print || true
-          tail -n 100 build.log || true
+            show $B/ESP32_GENERIC/mpconfigboard.cmake
+            show $B/ESP32_GENERIC/mpconfigboard.h
+            show $B/ESP32_GENERIC/sdkconfig.board
+            show $B/sdkconfig.base
+            show $B/sdkconfig.ble
 
-      - name: Guardar artefactos
+            echo; echo "######## grep mpconfigport.h ########"
+            grep -n "GC_SPLIT\|GC_INITIAL\|ALLOC_HEAP\|BLUETOOTH" $P/mpconfigport.h 2>&1 || true
+
+            echo; echo "######## grep heap en main.c ########"
+            grep -n -i "heap" $P/main.c 2>&1 || true
+
+            echo; echo "######## SDKCONFIG en CMakeLists ########"
+            grep -n -i "sdkconfig" $P/CMakeLists.txt $P/main/CMakeLists.txt 2>&1 || true
+
+            echo; echo "######## builder/ (sdkconfig, bluetooth, heap, idf) ########"
+            ls builder 2>&1
+            grep -rn -i "sdkconfig\|bluetooth\|CONFIG_BT\|heap\|SPIRAM\|esp-idf" builder/ 2>&1 | head -80 || true
+          } > inspect.txt 2>&1
+
+          wc -l inspect.txt
+          cat inspect.txt
+
+      - name: Guardar reporte
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cyd-lvgl-micropython
-          path: |
-            firmware/build/**/*.bin
-            firmware/build.log
-          if-no-files-found: warn
-          retention-days: 14
+          name: inspect-config
+          path: fw/inspect.txt
+          retention-days: 7
