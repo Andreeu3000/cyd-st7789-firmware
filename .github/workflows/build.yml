@@ -25,63 +25,70 @@ jobs:
             python3 \
             python3-venv \
             python3-pip \
+            libusb-1.0-0-dev \
             git \
-            wget \
-            curl \
-            ccache \
-            libusb-1.0-0-dev
+            ccache
 
-      - name: Descargar lvgl_micropython
+      - name: Descargar LVGL MicroPython
         run: |
-          git clone --recursive \
+          git clone \
             https://github.com/lvgl-micropython/lvgl_micropython.git \
             firmware
-          cd firmware
 
-      - name: Crear particiones de 4 MB
+      - name: Descargar dependencias de MicroPython
         working-directory: firmware
         run: |
-          cat > partitions-4mb-custom.csv <<'EOF'
-          # Name,     Type, SubType, Offset,   Size, Flags
-          nvs,        data, nvs,     0x9000,   0x5000,
-          phy_init,   data, phy,     0xe000,   0x1000,
-          factory,    app,  factory, 0x10000,  0x330000,
-          EOF
+          python3 - <<'PY'
+          import builder
+          builder.get_micropython()
+          print("MicroPython descargado correctamente.")
+          PY
 
-      - name: Reservar memoria interna para Wi-Fi
+          test -f lib/micropython/ports/esp32/mpconfigport.h
+
+          echo "Configuración del heap encontrada:"
+          grep -n "MICROPY_GC_SPLIT_HEAP" \
+            lib/micropython/ports/esp32/mpconfigport.h || true
+
+      - name: Ajustar el heap de Python
         working-directory: firmware
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path(
               "lib/micropython/ports/esp32/mpconfigport.h"
           )
 
-          if not path.exists():
-              raise SystemExit(
-                  f"No se encontró el archivo: {path}"
-              )
-
           text = path.read_text(encoding="utf-8")
 
-          marker = "#define MICROPY_GC_SPLIT_HEAP_AUTO (1)"
-
-          if marker not in text:
-              raise SystemExit(
-                  "No se encontró MICROPY_GC_SPLIT_HEAP_AUTO. "
-                  "La estructura de MicroPython ha cambiado."
-              )
-
           if "cyd_mp_gc_alloc_heap" in text:
-              print("La reserva del heap ya está aplicada.")
+              print("El ajuste ya está aplicado.")
               raise SystemExit(0)
+
+          marker = re.compile(
+              r"^[ \t]*#define[ \t]+"
+              r"MICROPY_GC_SPLIT_HEAP_AUTO\b.*$",
+              re.MULTILINE,
+          )
+
+          match = marker.search(text)
+
+          if not match:
+              print("No se encontró la definición esperada.")
+              print("Definiciones de heap encontradas:")
+              for line in text.splitlines():
+                  if "MICROPY_GC_" in line or "MP_PLAT_ALLOC_HEAP" in line:
+                      print(line)
+              raise SystemExit(
+                  "No se aplicó el parche: revisa la versión descargada."
+              )
 
           patch = r'''
           /*
-           * CYD: limitar el crecimiento automatico del heap
-           * de MicroPython para conservar memoria interna
-           * destinada a Wi-Fi, lwIP y ESP-IDF.
+           * CYD: limita el crecimiento automatico del heap
+           * de Python para conservar memoria interna.
            */
           #include <stdlib.h>
           #include "esp_heap_caps.h"
@@ -109,19 +116,32 @@ jobs:
           #define MP_PLAT_ALLOC_HEAP(size) \
               cyd_mp_gc_alloc_heap(size)
           #endif
+
           '''
 
-          text = text.replace(
-              marker,
-              patch + "\n" + marker,
-              1
+          text = (
+              text[:match.start()]
+              + patch
+              + text[match.start():]
           )
 
           path.write_text(text, encoding="utf-8")
-          print("Reserva de 32 KiB aplicada.")
+
+          print("Parche de heap aplicado.")
+          print("Reserva objetivo: 32 KiB.")
           PY
 
-      - name: Compilar firmware ESP32
+      - name: Crear particiones de 4 MB
+        working-directory: firmware
+        run: |
+          cat > partitions-4mb-custom.csv <<'EOF'
+          # Name,     Type, SubType, Offset,   Size, Flags
+          nvs,        data, nvs,     0x9000,   0x5000,
+          phy_init,   data, phy,     0xe000,   0x1000,
+          factory,    app,  factory, 0x10000,  0x330000,
+          EOF
+
+      - name: Compilar firmware
         working-directory: firmware
         shell: bash
         run: |
@@ -139,19 +159,14 @@ jobs:
             LV_CFLAGS="-DLV_USE_IMAGE=1" \
             2>&1 | tee build.log
 
-      - name: Mostrar archivos generados
+      - name: Mostrar firmware generado
         if: always()
         working-directory: firmware
         run: |
-          echo "Archivos BIN encontrados:"
           find build -type f -name "*.bin" -print || true
+          tail -n 100 build.log || true
 
-          echo "Archivos de registro:"
-          find . -maxdepth 3 \
-            \( -name "build.log" -o -name "idf*.log" \) \
-            -print || true
-
-      - name: Subir firmware y registros
+      - name: Guardar artefactos
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -159,6 +174,5 @@ jobs:
           path: |
             firmware/build/**/*.bin
             firmware/build.log
-            firmware/**/*.log
           if-no-files-found: warn
           retention-days: 14
