@@ -1,102 +1,168 @@
-
-name: Compilar LVGL MicroPython - ESP32-S3 N16R8 ILI9488
+name: LVGL MicroPython - ESP32-S3 N16R8 (ILI9488 + XPT2046)
 
 on:
   workflow_dispatch:
     inputs:
-      wifi_tune:
-        description: "Reducir buffers WiFi para ahorrar RAM"
-        type: boolean
-        default: true
+      repl:
+        description: "Salida del REPL: uart (puerto UART/CH340) o cdc (USB nativo GPIO19/20)"
+        type: choice
+        options:
+          - uart
+          - cdc
+        default: uart
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
-      - name: Descargar LVGL MicroPython
+      # El README de lvgl_micropython pide clonar SIN --recursive:
+      # make.py baja los submodulos que necesita por su cuenta.
+      - name: Clonar lvgl_micropython
         run: |
-          git clone --recursive \
-            https://github.com/lvgl-micropython/lvgl_micropython.git .
-          echo "Commit: $(git rev-parse --short HEAD)"
-          echo "MicroPython: $(git -C lib/micropython describe --tags --always)"
+          git clone https://github.com/lvgl-micropython/lvgl_micropython.git .
+          echo "lvgl_micropython: $(git rev-parse --short HEAD)"
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Instalar dependencias
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            cmake \
-            ninja-build \
-            ccache \
-            libusb-1.0-0-dev
+            build-essential cmake ninja-build ccache libusb-1.0-0-dev
           python3 -m pip install esptool
 
-      - name: Ajustar buffers WiFi
-        if: ${{ inputs.wifi_tune }}
-        shell: bash
-        run: |
-          set -e
-          P=lib/micropython/ports/esp32/boards/sdkconfig.base
-
-          cat >> "$P" <<'EOF'
-
-          # Ajustes WiFi para ESP32-S3
-          CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
-          CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
-          CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
-          EOF
-
-      - name: Compilar ESP32-S3 con PSRAM
+      - name: Compilar
         shell: bash
         run: |
           set -o pipefail
 
+          if [ "${{ inputs.repl }}" = "cdc" ]; then
+            REPL_ARGS="--enable-cdc-repl=y --enable-uart-repl=n --enable-jtag-repl=n"
+          else
+            REPL_ARGS="--enable-cdc-repl=n --enable-jtag-repl=n --enable-uart-repl=y --uart-repl-bitrate=115200"
+          fi
+
+          # N16R8: flash QUAD de 16MB + PSRAM OCTAL de 8MB
+          # => SPIRAM_OCT, y NO se usa --octal-flash
           python3 make.py esp32 \
             BOARD=ESP32_GENERIC_S3 \
             BOARD_VARIANT=SPIRAM_OCT \
             DISPLAY=ili9488 \
             INDEV=xpt2046 \
             --flash-size=16 \
-            --enable-cdc-repl=n \
-            --enable-jtag-repl=n \
-            --enable-uart-repl=y \
-            --uart-repl-bitrate=115200 \
+            $REPL_ARGS \
             --optimize-size \
             --ccache \
             2>&1 | tee build.log
 
-      - name: Mostrar errores de compilación
+      - name: Mostrar final del log si falla
         if: failure()
         run: |
-          tail -n 160 build.log || true
-          find build -type f -name "*.bin" -print || true
+          tail -n 150 build.log || true
+          find . -name "*.bin" -not -path "./lib/esp-idf/*" -print || true
 
-      - name: Verificar y empaquetar firmware
+      - name: Reunir binarios
         if: success()
         shell: bash
         run: |
           set -e
           mkdir -p final_firmware
 
-          FIRMWARE="build/lvgl_micropy_ESP32_GENERIC_S3-SPIRAM_OCT-16.bin"
+          MERGED=$(ls build/lvgl_micropy_*.bin 2>/dev/null | head -1 || true)
+          BOOT=$(find lib/micropython/ports/esp32 -path "*build-ESP32_GENERIC_S3*" -name bootloader.bin | head -1)
+          PART=$(find lib/micropython/ports/esp32 -path "*build-ESP32_GENERIC_S3*" -name partition-table.bin | head -1)
+          APP=$(find lib/micropython/ports/esp32 -path "*build-ESP32_GENERIC_S3*" -name micropython.bin | head -1)
 
-          if [ ! -f "$FIRMWARE" ]; then
-            echo "No se encontró el nombre esperado."
-            find build -type f -name "*.bin" -print
-            exit 1
-          fi
+          echo "MERGED=$MERGED"
+          echo "BOOT=$BOOT"
+          echo "PART=$PART"
+          echo "APP=$APP"
 
-          cp "$FIRMWARE" final_firmware/firmware.bin
-          cp "$FIRMWARE" final_firmware/lvgl_micropy_ESP32_S3_N16R8_ILI9488.bin
+          for f in "$MERGED" "$BOOT" "$PART" "$APP"; do
+            [ -n "$f" ] && [ -f "$f" ] || { echo "ERROR: falta un binario"; exit 1; }
+          done
 
+          cp "$MERGED" final_firmware/merged_0x0.bin
+          cp "$BOOT"   final_firmware/bootloader_0x0.bin
+          cp "$PART"   final_firmware/partition-table_0x8000.bin
+          cp "$APP"    final_firmware/micropython_0x10000.bin
+
+          echo "MERGED=$MERGED" >> "$GITHUB_ENV"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+
+      # Falla el job si el merged no contiene la app donde la tabla dice.
+      # Esto es justo lo que daba "Factory app partition is not bootable".
+      - name: Verificar merged contra su tabla de particiones
+        if: success()
+        shell: bash
+        run: |
+          python3 - final_firmware/merged_0x0.bin final_firmware/micropython_0x10000.bin <<'PY'
+          import struct, sys
+
+          merged = open(sys.argv[1], "rb").read()
+          app = open(sys.argv[2], "rb").read()
+
+          print("merged:", len(merged), "bytes | micropython.bin:", len(app), "bytes")
+
+          if merged[0] != 0xE9:
+              sys.exit("ERROR: el byte 0 del merged no es 0xE9 (bootloader invalido)")
+
+          pt = merged[0x8000:0x8000 + 0xC00]
+          apps = []
+          for i in range(0, len(pt), 32):
+              e = pt[i:i + 32]
+              if e[:2] != b"\xaa\x50":
+                  break
+              typ, sub, off, size = struct.unpack("<BBII", e[2:12])
+              label = e[12:28].split(b"\0")[0].decode(errors="replace")
+              print(f"  {label:10s} type={typ} sub={sub:#04x} offset={off:#09x} size={size:#09x}")
+              if typ == 0:
+                  apps.append((label, off, size))
+
+          if not apps:
+              sys.exit("ERROR: la tabla no tiene particion app")
+
+          label, off, size = apps[0]
+          if len(app) > size:
+              sys.exit(f"ERROR: la app ({len(app):#x}) no cabe en {label} ({size:#x})")
+          if merged[off:off + len(app)] != app:
+              sys.exit(f"ERROR: el merged NO contiene micropython.bin en {off:#x}")
+
+          print(f"OK: la app esta en {label} @ {off:#x} y cabe ({len(app):#x} <= {size:#x})")
+          PY
+
+      - name: Instrucciones de flasheo
+        if: success()
+        shell: bash
+        run: |
+          cat > final_firmware/FLASH.txt <<'EOF'
+          Parametros: chip ESP32-S3, flash_mode DIO, flash_freq 80m, flash_size 16MB
+
+          OPCION A - un solo archivo (borra primero):
+            esptool.py --chip esp32s3 -b 460800 erase_flash
+            esptool.py --chip esp32s3 -b 460800 write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m 0x0 merged_0x0.bin
+
+          OPCION B - archivos separados (la mas fiable):
+            esptool.py --chip esp32s3 -b 460800 erase_flash
+            esptool.py --chip esp32s3 -b 460800 write_flash --flash_mode dio --flash_size 16MB --flash_freq 80m \
+              0x0 bootloader_0x0.bin 0x8000 partition-table_0x8000.bin 0x10000 micropython_0x10000.bin
+
+          App Android "ESP32 Flash/Erase": usa el boton + para agregar los 3 archivos
+          de la opcion B con esos offsets, y pon spiMode=DIO, spiFreq=80m, flashSize=16MB.
+          EOF
+          sha256sum final_firmware/*.bin | tee final_firmware/SHA256SUMS.txt
           ls -lh final_firmware/
 
       - name: Subir firmware
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-esp32-s3-n16r8-ili9488
+          name: firmware-esp32-s3-n16r8
           path: final_firmware/
 
       - name: Subir log
