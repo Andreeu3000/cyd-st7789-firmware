@@ -1,0 +1,107 @@
+
+name: Compilar LVGL MicroPython - ESP32-S3 N16R8 ILI9488
+
+on:
+  workflow_dispatch:
+    inputs:
+      wifi_tune:
+        description: "Reducir buffers WiFi para ahorrar RAM"
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar LVGL MicroPython
+        run: |
+          git clone --recursive \
+            https://github.com/lvgl-micropython/lvgl_micropython.git .
+          echo "Commit: $(git rev-parse --short HEAD)"
+          echo "MicroPython: $(git -C lib/micropython describe --tags --always)"
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            ccache \
+            libusb-1.0-0-dev
+          python3 -m pip install esptool
+
+      - name: Ajustar buffers WiFi
+        if: ${{ inputs.wifi_tune }}
+        shell: bash
+        run: |
+          set -e
+          P=lib/micropython/ports/esp32/boards/sdkconfig.base
+
+          cat >> "$P" <<'EOF'
+
+          # Ajustes WiFi para ESP32-S3
+          CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+          CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+          CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+          EOF
+
+      - name: Compilar ESP32-S3 con PSRAM
+        shell: bash
+        run: |
+          set -o pipefail
+
+          python3 make.py esp32 \
+            BOARD=ESP32_GENERIC_S3 \
+            BOARD_VARIANT=SPIRAM_OCT \
+            DISPLAY=ili9488 \
+            INDEV=xpt2046 \
+            --flash-size=16 \
+            --enable-cdc-repl=n \
+            --enable-jtag-repl=n \
+            --enable-uart-repl=y \
+            --uart-repl-bitrate=115200 \
+            --optimize-size \
+            --ccache \
+            2>&1 | tee build.log
+
+      - name: Mostrar errores de compilación
+        if: failure()
+        run: |
+          tail -n 160 build.log || true
+          find build -type f -name "*.bin" -print || true
+
+      - name: Verificar y empaquetar firmware
+        if: success()
+        shell: bash
+        run: |
+          set -e
+          mkdir -p final_firmware
+
+          FIRMWARE="build/lvgl_micropy_ESP32_GENERIC_S3-SPIRAM_OCT-16.bin"
+
+          if [ ! -f "$FIRMWARE" ]; then
+            echo "No se encontró el nombre esperado."
+            find build -type f -name "*.bin" -print
+            exit 1
+          fi
+
+          cp "$FIRMWARE" final_firmware/firmware.bin
+          cp "$FIRMWARE" final_firmware/lvgl_micropy_ESP32_S3_N16R8_ILI9488.bin
+
+          ls -lh final_firmware/
+
+      - name: Subir firmware
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32-s3-n16r8-ili9488
+          path: final_firmware/
+
+      - name: Subir log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
